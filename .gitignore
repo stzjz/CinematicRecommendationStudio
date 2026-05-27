@@ -1,0 +1,10 @@
+.conda/
+.venv/
+backend/data/*.db
+backend/app/__pycache__/
+backend/app/recommenders/__pycache__/
+backend/app/services/__pycache__/
+backend/scripts/__pycache__/
+backend/tests/__pycache__/
+frontend/node_modules/
+frontend/dist/
