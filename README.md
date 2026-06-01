@@ -213,6 +213,48 @@ PATH="$PWD/.tools/node/bin:$PATH" npm --prefix frontend run build
 - `/api/metrics/models`
 - `/api/metrics/ablation`
 
+## 临时公网访问
+
+课程答辩或临时演示时，可以使用 [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/) 将本地前端映射为公网 HTTPS 地址。外部请求会经过 Cloudflare 加密隧道转发到本机 Vite 服务，不需要公网 IP、路由器端口映射或开放入站端口。
+
+保持前端和后端服务运行，在第三个终端中执行：
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:5173
+```
+
+终端会输出类似以下地址：
+
+```text
+https://random-name.trycloudflare.com
+```
+
+手机或其他设备直接打开该 HTTPS 地址即可。如果 Vite 实际使用 `5174` 等其他端口，请同步修改 `cloudflared` 命令中的端口。
+
+### 实验室服务器
+
+实验室服务器即使没有公网 IP，也可以使用相同方式建立隧道。服务器需要允许主动访问外网，并满足以下条件：
+
+- 可以正常解析域名。
+- 防火墙允许出站连接。
+- 优先允许出站 `TCP/UDP 7844`。
+- 如果 UDP 受限，可以显式使用 HTTP/2：
+
+```bash
+cloudflared tunnel --protocol http2 --url http://127.0.0.1:5173
+```
+
+### 安全注意事项
+
+- Quick Tunnel 仅适合临时测试和课程展示，不适合长期生产部署。
+- 隧道运行期间，任何获得随机网址的人都可以访问页面和当前公开的 `/api` 接口。
+- 只暴露前端端口，不要暴露 SSH、数据库端口或整个目录。
+- 不要在演示数据库中保存密码、真实个人信息或隐私数据。
+- 展示结束后，在前端、后端和 `cloudflared` 三个终端中分别按 `Ctrl+C`。
+- 长期公开部署时，应使用正式 Tunnel、固定域名、身份认证和限流。
+
+Quick Tunnel 的官方说明见：[TryCloudflare](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)。
+
 ## 数据源切换
 
 默认策略：
