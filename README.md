@@ -55,14 +55,24 @@ CinematicRecommendationStudio/
 
 ## 环境配置
 
-后端建议使用项目内的 `.venv`，避免污染全局 Python 环境：
+以下命令均从项目根目录执行。先进入项目：
 
 ```bash
 cd CinematicRecommendationStudio
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r backend/requirements.txt
 ```
+
+### 后端环境
+
+使用项目内的 `.venv`，避免污染全局 Python 环境：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
+```
+
+不需要激活虚拟环境，后续命令会直接调用 `.venv/bin` 中的 Python 工具。
+
+### 前端环境
 
 前端需要 `Node.js 20+`。如果本机没有 Node，可以将官方二进制解压到项目内的 `.tools/node`，避免安装到全局环境。以下示例适用于 macOS Apple Silicon：
 
@@ -72,28 +82,69 @@ curl -fsSL https://nodejs.org/dist/v24.15.0/node-v24.15.0-darwin-arm64.tar.gz \
   -o /tmp/node-v24.15.0-darwin-arm64.tar.gz
 tar -xzf /tmp/node-v24.15.0-darwin-arm64.tar.gz -C .tools
 mv .tools/node-v24.15.0-darwin-arm64 .tools/node
-export PATH="$PWD/.tools/node/bin:$PATH"
 ```
+
+安装前端依赖：
+
+```bash
+PATH="$PWD/.tools/node/bin:$PATH" npm --prefix frontend ci
+```
+
+如果本机已经全局安装了 `Node.js 20+`，也可以直接运行 `npm --prefix frontend ci`。
 
 `.venv`、`.tools`、`node_modules`、构建产物和本地数据库均已加入 `.gitignore`。
 
-## 启动后端
+## 数据库初始化
 
-首次运行时初始化 SQLite 数据库：
+项目使用 `SQLite`，数据库文件位于 `backend/data/app.db`。
+
+### 导入 MovieLens-1M
+
+项目支持将 MovieLens-1M 的用户、电影和评分数据导入 SQLite。将数据集压缩包放在 `backend/data/raw/ml-1m.zip`，不需要手动解压。
+
+如果本地还没有压缩包，可以从 GroupLens 下载：
 
 ```bash
-cd CinematicRecommendationStudio/backend
-../.venv/bin/python scripts/init_sqlite.py
+mkdir -p backend/data/raw
+curl -fL https://files.grouplens.org/datasets/movielens/ml-1m.zip \
+  -o backend/data/raw/ml-1m.zip
 ```
 
-初始化后会生成默认数据库文件：
-- `backend/data/app.db`
-
-启动后端：
+执行导入：
 
 ```bash
-cd CinematicRecommendationStudio/backend
-../.venv/bin/uvicorn app.main:app --reload
+.venv/bin/python backend/scripts/import_movielens.py
+```
+
+MovieLens-1M 导入后包含：
+- `6,040` 个用户
+- `3,883` 部电影
+- `1,000,209` 条评分
+
+### 使用演示样例
+
+如需快速恢复为内置演示数据，可以运行：
+
+```bash
+.venv/bin/python backend/scripts/init_sqlite.py
+```
+
+该命令会创建包含 `3` 个用户、`24` 部电影和 `31` 条评分的轻量样例库。
+
+## 启动项目
+
+后端和前端需要分别在两个终端中启动。两个终端都先进入项目根目录：
+
+```bash
+cd CinematicRecommendationStudio
+```
+
+### 启动后端
+
+在第一个终端运行：
+
+```bash
+.venv/bin/uvicorn app.main:app --app-dir backend --reload
 ```
 
 启动后可直接打开：
@@ -107,36 +158,37 @@ cd CinematicRecommendationStudio/backend
 - `/api/recommendations/{user_id}`
 - `/api/metrics/models`
 
-## 启动前端
+### 启动前端
 
 前端使用 `React + Vite`，开发时通过代理把 `/api` 转发到 `127.0.0.1:8000`。
 
-如果使用项目内 Node，先在项目根目录将它加入当前终端的 `PATH`：
+在第二个终端运行：
 
 ```bash
-export PATH="$PWD/.tools/node/bin:$PATH"
-```
-
-使用锁文件安装依赖：
-
-```bash
-cd frontend
-npm ci
-```
-
-启动开发服务器：
-
-```bash
-npm run dev -- --host 0.0.0.0
+PATH="$PWD/.tools/node/bin:$PATH" npm --prefix frontend run dev -- --host 0.0.0.0
 ```
 
 默认访问：
 - `http://127.0.0.1:5173/`
 
+如果 `5173` 端口已被占用，Vite 会自动尝试 `5174` 等其他端口。请以终端输出的 `Local` 地址为准。可以使用以下命令检查端口占用：
+
+```bash
+lsof -nP -iTCP:5173 -sTCP:LISTEN
+```
+
+如果出现 `zsh: command not found: npm`，请确认命令是在项目根目录执行，并检查本地 Node 是否存在：
+
+```bash
+ls .tools/node/bin/node
+```
+
 如果代理环境有问题，也可以显式指定后端地址：
 
 ```bash
-VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev -- --host 0.0.0.0
+PATH="$PWD/.tools/node/bin:$PATH" \
+  VITE_API_BASE_URL=http://127.0.0.1:8000/api \
+  npm --prefix frontend run dev -- --host 0.0.0.0
 ```
 
 后端已经允许这些常见前端来源跨域访问：
@@ -148,7 +200,7 @@ VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev -- --host 0.0.0.0
 生产构建：
 
 ```bash
-npm run build
+PATH="$PWD/.tools/node/bin:$PATH" npm --prefix frontend run build
 ```
 
 当前前端已经接入这些后端接口：
@@ -170,8 +222,9 @@ npm run build
 也可以显式指定：
 
 ```bash
-cd CinematicRecommendationStudio/backend
-RECSYS_DATA_SOURCE=sqlite RECSYS_DB_PATH="$PWD/data/app.db" ../.venv/bin/uvicorn app.main:app --reload
+RECSYS_DATA_SOURCE=sqlite \
+  RECSYS_DB_PATH="$PWD/backend/data/app.db" \
+  .venv/bin/uvicorn app.main:app --app-dir backend --reload
 ```
 
 支持的 `RECSYS_DATA_SOURCE`：
@@ -189,7 +242,7 @@ RECSYS_DATA_SOURCE=sqlite RECSYS_DB_PATH="$PWD/data/app.db" ../.venv/bin/uvicorn
 ## 运行测试
 
 ```bash
-cd CinematicRecommendationStudio/backend
+cd backend
 ../.venv/bin/python -m unittest discover -s tests -v
 ```
 
