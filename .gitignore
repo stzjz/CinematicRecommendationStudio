@@ -1,5 +1,6 @@
 .conda/
 .venv/
+.tools/
 backend/data/*.db
 backend/app/__pycache__/
 backend/app/recommenders/__pycache__/

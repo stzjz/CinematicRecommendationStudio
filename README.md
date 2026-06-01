@@ -1,11 +1,11 @@
-# BigDataHomework
+# CinematicRecommendationStudio
 
 一个面向课程答辩展示的电影推荐系统项目骨架。当前重点是先把前后端联调用的基础设施搭好：统一接口、简单推荐基线、数据库 schema、开发文档和后续可替换的算法接入层。
 
 ## 当前目录
 
 ```text
-BigDataHomework/
+CinematicRecommendationStudio/
 ├── README.md
 ├── docs/
 │   ├── backend_design.md
@@ -53,28 +53,37 @@ BigDataHomework/
 
 这样后续接入 `NeuMF`、`LightGCN` 时，前端不用改接口消费方式，只需要切换算法名。
 
-## 环境建议
+## 环境配置
 
-优先使用项目本地 `conda` 环境：
-
-```bash
-conda activate /data3/zengjian/BigDataHomework/.conda
-pip install -r BigDataHomework/backend/requirements.txt
-```
-
-如果机器后续补齐了 `python3-venv`，也可以改用：
+后端建议使用项目内的 `.venv`，避免污染全局 Python 环境：
 
 ```bash
-python3 -m venv BigDataHomework/.venv
-source BigDataHomework/.venv/bin/activate
-pip install -r BigDataHomework/backend/requirements.txt
+cd CinematicRecommendationStudio
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r backend/requirements.txt
 ```
+
+前端需要 `Node.js 20+`。如果本机没有 Node，可以将官方二进制解压到项目内的 `.tools/node`，避免安装到全局环境。以下示例适用于 macOS Apple Silicon：
+
+```bash
+mkdir -p .tools
+curl -fsSL https://nodejs.org/dist/v24.15.0/node-v24.15.0-darwin-arm64.tar.gz \
+  -o /tmp/node-v24.15.0-darwin-arm64.tar.gz
+tar -xzf /tmp/node-v24.15.0-darwin-arm64.tar.gz -C .tools
+mv .tools/node-v24.15.0-darwin-arm64 .tools/node
+export PATH="$PWD/.tools/node/bin:$PATH"
+```
+
+`.venv`、`.tools`、`node_modules`、构建产物和本地数据库均已加入 `.gitignore`。
 
 ## 启动后端
 
+首次运行时初始化 SQLite 数据库：
+
 ```bash
-cd /data3/zengjian/BigDataHomework/backend
-../.conda/bin/python scripts/init_sqlite.py
+cd CinematicRecommendationStudio/backend
+../.venv/bin/python scripts/init_sqlite.py
 ```
 
 初始化后会生成默认数据库文件：
@@ -83,8 +92,8 @@ cd /data3/zengjian/BigDataHomework/backend
 启动后端：
 
 ```bash
-cd BigDataHomework/backend
-../.conda/bin/uvicorn app.main:app --reload
+cd CinematicRecommendationStudio/backend
+../.venv/bin/uvicorn app.main:app --reload
 ```
 
 启动后可直接打开：
@@ -102,23 +111,22 @@ cd BigDataHomework/backend
 
 前端使用 `React + Vite`，开发时通过代理把 `/api` 转发到 `127.0.0.1:8000`。
 
-先确保项目本地环境里的 `node` 在前面：
+如果使用项目内 Node，先在项目根目录将它加入当前终端的 `PATH`：
 
 ```bash
-export PATH=/data3/zengjian/BigDataHomework/.conda/bin:$PATH
+export PATH="$PWD/.tools/node/bin:$PATH"
 ```
 
-安装依赖：
+使用锁文件安装依赖：
 
 ```bash
-cd /data3/zengjian/BigDataHomework/frontend
-npm install
+cd frontend
+npm ci
 ```
 
 启动开发服务器：
 
 ```bash
-cd /data3/zengjian/BigDataHomework/frontend
 npm run dev -- --host 0.0.0.0
 ```
 
@@ -128,8 +136,6 @@ npm run dev -- --host 0.0.0.0
 如果代理环境有问题，也可以显式指定后端地址：
 
 ```bash
-export PATH=/data3/zengjian/BigDataHomework/.conda/bin:$PATH
-cd /data3/zengjian/BigDataHomework/frontend
 VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev -- --host 0.0.0.0
 ```
 
@@ -142,7 +148,6 @@ VITE_API_BASE_URL=http://127.0.0.1:8000/api npm run dev -- --host 0.0.0.0
 生产构建：
 
 ```bash
-cd /data3/zengjian/BigDataHomework/frontend
 npm run build
 ```
 
@@ -165,7 +170,8 @@ npm run build
 也可以显式指定：
 
 ```bash
-RECSYS_DATA_SOURCE=sqlite RECSYS_DB_PATH=/data3/zengjian/BigDataHomework/backend/data/app.db ../.conda/bin/uvicorn app.main:app --reload
+cd CinematicRecommendationStudio/backend
+RECSYS_DATA_SOURCE=sqlite RECSYS_DB_PATH="$PWD/data/app.db" ../.venv/bin/uvicorn app.main:app --reload
 ```
 
 支持的 `RECSYS_DATA_SOURCE`：
@@ -179,6 +185,13 @@ RECSYS_DATA_SOURCE=sqlite RECSYS_DB_PATH=/data3/zengjian/BigDataHomework/backend
 - MySQL schema: `backend/sql/schema_mysql.sql`
 
 当前已经先打通 `SQLite`，更适合本地开发和课程答辩演示；后续如果部署到 MySQL，可以继续沿用同一套接口层。
+
+## 运行测试
+
+```bash
+cd CinematicRecommendationStudio/backend
+../.venv/bin/python -m unittest discover -s tests -v
+```
 
 ## 下一步建议
 
