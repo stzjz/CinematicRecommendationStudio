@@ -33,3 +33,13 @@ class RecommendationService(object):
                 "description": recommender.description,
             },
         }
+
+    def record_rating(self, user_id, movie_id, rating):
+        for recommender in self.recommenders.values():
+            if hasattr(recommender, "record_rating"):
+                recommender.record_rating(user_id, movie_id, rating)
+
+    def delete_rating(self, user_id, movie_id):
+        for recommender in self.recommenders.values():
+            if hasattr(recommender, "delete_rating"):
+                recommender.delete_rating(user_id, movie_id)

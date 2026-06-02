@@ -38,3 +38,14 @@ class PopularityRecommender(BaseRecommender):
             movie["support"] = count
             results.append(movie)
         return results
+
+    def record_rating(self, user_id, movie_id, rating):
+        if movie_id in self.user_seen.get(user_id, set()):
+            return
+        self.user_seen.setdefault(user_id, set()).add(movie_id)
+        stats = self.movie_stats.setdefault(movie_id, {"total": 0.0, "count": 0})
+        stats["total"] += float(rating)
+        stats["count"] += 1
+
+    def delete_rating(self, user_id, movie_id):
+        self.user_seen.get(user_id, set()).discard(movie_id)

@@ -9,12 +9,27 @@ try:
     from fastapi import FastAPI, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse, Response
+    from pydantic import BaseModel
 except ImportError:
     FastAPI = None
     HTTPException = Exception
     Query = None
     CORSMiddleware = None
     HTMLResponse = None
+    BaseModel = object
+
+
+class UserCreatePayload(BaseModel):
+    username: str
+    age: int | None = None
+    gender: str | None = None
+    occupation: str | None = None
+
+
+class RatingPayload(BaseModel):
+    movie_id: int
+    rating: float
+    comment: str | None = None
 
 
 def render_homepage():
@@ -323,7 +338,7 @@ def render_homepage():
     <section class="hero">
       <div class="eyebrow">Recommendation System Demo</div>
       <h1 id="hero-title">CineMatch Demo</h1>
-      <p id="hero-subtitle">把推荐算法接口和课程答辩展示放在同一个可访问首页里，打开根路径就能直接看到系统状态、热门电影、个性推荐和模型指标。</p>
+      <p id="hero-subtitle">把推荐算法接口和课程答辩展示放在同一个可访问首页里，打开根路径就能直接看到系统状态、热门电影和个性推荐。</p>
       <div class="hero-grid">
         <div class="panel controls">
           <div class="control-row">
@@ -367,17 +382,6 @@ def render_homepage():
         </div>
       </div>
 
-      <div class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>模型指标</h2>
-            <p>基线算法与实验结果概览</p>
-          </div>
-        </div>
-        <div id="metrics" class="mini-list">
-          <div class="loading">正在加载模型指标...</div>
-        </div>
-      </div>
     </section>
 
     <section class="content">
@@ -469,12 +473,11 @@ def render_homepage():
       document.getElementById("hero-title").textContent = pageConfig.title;
       document.getElementById("hero-subtitle").textContent = "后端首页现在直接展示推荐系统内容，适合先联调再做正式前端。";
 
-      const [health, users, algorithms, hotMovies, metrics] = await Promise.all([
+      const [health, users, algorithms, hotMovies] = await Promise.all([
         getJson("/api/health"),
         getJson("/api/users"),
         getJson("/api/algorithms"),
-        getJson("/api/movies/hot?limit=4"),
-        getJson("/api/metrics/models")
+        getJson("/api/movies/hot?limit=4")
       ]);
 
       state.users = users.items || [];
@@ -492,15 +495,6 @@ def render_homepage():
       document.getElementById("algo-count").textContent = String(state.algorithms.length);
 
       renderMovieCards("hot-movies", hotMovies.items || [], "暂无热门电影数据");
-      renderMiniList("metrics", metrics.items || [], function(item) {
-        return `
-          <article class="mini-item">
-            <h4>${item.model_name}</h4>
-            <p>HR@10: ${Number(item.hr10).toFixed(3)} | NDCG@10: ${Number(item.ndcg10).toFixed(3)}</p>
-            <p>${item.remark || "实验指标展示"}</p>
-          </article>
-        `;
-      }, "暂无模型指标");
 
       await refreshRecommendation();
       document.getElementById("refresh-btn").addEventListener("click", refreshRecommendation);
@@ -590,8 +584,20 @@ def build_app():
         }
 
     @app.get("/api/users")
-    def list_users():
-        return {"items": catalog_service.list_users()}
+    def list_users(limit: int = Query(200, ge=1, le=1000)):
+        return {"items": catalog_service.list_users(limit=limit)}
+
+    @app.post("/api/users")
+    def create_user(payload: UserCreatePayload):
+        try:
+            return catalog_service.create_user(
+                username=payload.username,
+                age=payload.age,
+                gender=payload.gender,
+                occupation=payload.occupation,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get("/api/algorithms")
     def list_algorithms():
@@ -601,9 +607,27 @@ def build_app():
     def hot_movies(limit: int = Query(10, ge=1, le=50)):
         return {"items": catalog_service.list_hot_movies(limit=limit)}
 
+    @app.get("/api/movies/hot/boards")
+    def hot_movie_boards(
+        limit_per_genre: int = Query(5, ge=1, le=20),
+        max_boards: int = Query(6, ge=1, le=20),
+    ):
+        return {"items": catalog_service.list_hot_movie_boards(limit_per_genre=limit_per_genre, max_boards=max_boards)}
+
+    @app.get("/api/movies/search")
+    def search_movies(q: str = Query("", min_length=1), limit: int = Query(20, ge=1, le=50)):
+        return {"items": catalog_service.search_movies(q, limit=limit)}
+
+    @app.get("/api/movies/{movie_id}/ratings")
+    def get_movie_ratings(movie_id: int, limit: int = Query(8, ge=1, le=50), offset: int = Query(0, ge=0)):
+        result = catalog_service.get_movie_rating_records(movie_id, limit=limit, offset=offset)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Movie not found")
+        return result
+
     @app.get("/api/movies/{movie_id}")
     def get_movie(movie_id: int):
-        movie = catalog_service.get_movie(movie_id)
+        movie = catalog_service.get_movie_detail(movie_id)
         if movie is None:
             raise HTTPException(status_code=404, detail="Movie not found")
         return movie
@@ -611,6 +635,44 @@ def build_app():
     @app.get("/api/users/{user_id}/history")
     def user_history(user_id: int):
         return {"items": catalog_service.get_user_history(user_id)}
+
+    @app.get("/api/users/{user_id}/ratings/{movie_id}")
+    def get_user_movie_rating(user_id: int, movie_id: int):
+        rating = catalog_service.get_user_movie_rating(user_id, movie_id)
+        if rating is None:
+            raise HTTPException(status_code=404, detail="Rating not found")
+        return rating
+
+    @app.post("/api/users/{user_id}/ratings")
+    def create_user_rating(user_id: int, payload: RatingPayload):
+        try:
+            rating = catalog_service.save_user_rating(user_id, payload.movie_id, payload.rating, payload.comment)
+            recommendation_service.record_rating(user_id, payload.movie_id, payload.rating)
+            return rating
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.put("/api/users/{user_id}/ratings/{movie_id}")
+    def update_user_rating(user_id: int, movie_id: int, payload: RatingPayload):
+        try:
+            rating = catalog_service.save_user_rating(user_id, movie_id, payload.rating, payload.comment)
+            recommendation_service.record_rating(user_id, movie_id, payload.rating)
+            return rating
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.delete("/api/users/{user_id}/ratings/{movie_id}")
+    def delete_user_rating(user_id: int, movie_id: int):
+        deleted = catalog_service.delete_user_rating(user_id, movie_id)
+        recommendation_service.delete_rating(user_id, movie_id)
+        return {"deleted": deleted}
+
+    @app.get("/api/users/{user_id}/preference-profile")
+    def user_preference_profile(
+        user_id: int,
+        window: str = Query("all", pattern="^(all|year|quarter|month)$"),
+    ):
+        return catalog_service.get_user_preference_profile(user_id, window=window)
 
     @app.get("/api/recommendations/{user_id}")
     def get_recommendations(

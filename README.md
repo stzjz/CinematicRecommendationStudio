@@ -102,6 +102,8 @@ PATH="$PWD/.tools/node/bin:$PATH" npm --prefix frontend ci
 
 项目支持将 MovieLens-1M 的用户、电影和评分数据导入 SQLite。将数据集压缩包放在 `backend/data/raw/ml-1m.zip`，不需要手动解压。
 
+导入脚本也兼容带 CSV 文件的 MovieLens 数据集，例如包含 `movies.csv`、`ratings.csv`、`tags.csv` 的较大版本。若压缩包内存在 `tags.csv`，会同步导入用户自由文本标签到 `movie_tags` 表，并在电影详情页展示。
+
 如果本地还没有压缩包，可以从 GroupLens 下载：
 
 ```bash
@@ -154,9 +156,18 @@ cd CinematicRecommendationStudio
 接口地址：
 - `/api/health`
 - `/api/movies/hot`
+- `/api/movies/hot/boards`
+- `/api/movies/search`
+- `/api/movies/{movie_id}`
 - `/api/users`
+- `POST /api/users`
+- `/api/users/{user_id}/history`
+- `/api/users/{user_id}/preference-profile`
+- `/api/users/{user_id}/ratings/{movie_id}`
+- `POST /api/users/{user_id}/ratings`
+- `PUT /api/users/{user_id}/ratings/{movie_id}`
+- `DELETE /api/users/{user_id}/ratings/{movie_id}`
 - `/api/recommendations/{user_id}`
-- `/api/metrics/models`
 
 ### 启动前端
 
@@ -208,19 +219,67 @@ PATH="$PWD/.tools/node/bin:$PATH" npm --prefix frontend run build
 - `/api/users`
 - `/api/algorithms`
 - `/api/movies/hot`
+- `/api/movies/hot/boards`
+- `/api/movies/search`
+- `/api/movies/{movie_id}`
+- `/api/movies/{movie_id}/ratings`
 - `/api/recommendations/{user_id}`
 - `/api/users/{user_id}/history`
-- `/api/metrics/models`
-- `/api/metrics/ablation`
+- `/api/users/{user_id}/preference-profile`
+- `POST /api/users`
+- `/api/users/{user_id}/ratings/{movie_id}`
+- `POST /api/users/{user_id}/ratings`
+- `PUT /api/users/{user_id}/ratings/{movie_id}`
+- `DELETE /api/users/{user_id}/ratings/{movie_id}`
+
+页面职责：
+- `/`：首页展示当前用户、当前算法、个性化推荐、热门榜单和电影搜索；右上角可快速切换当前用户和推荐算法。
+- `/admin`：推荐后台控制面板，管理员可切换演示用户、推荐算法和展示条数，也可创建用户、搜索电影、维护评分和评论。
+- `/movies/{movie_id}`：独立电影详情页，展示真实海报、电影详细标签、评分分布、用户自由文本标签、当前用户的评分评论操作，以及可分页浏览的全部评分评论。
+
+数据库增删查改：
+- 增：创建用户；给当前用户或后台选中的用户新增电影评分和评论。
+- 查：首页和后台都可按标题、年份、类型宽松搜索电影；详情页可查看电影评分分布、精选评论和全部评论分页。
+- 改：在电影详情页修改当前用户对当前电影的评分和评论；后台也可修改指定用户对指定电影的记录。
+- 删：在电影详情页删除当前用户对当前电影的评分评论；后台也可删除指定用户对指定电影的评分记录。
+
+电影详情页的评论和评分是一体的：只有评分、没有评论文本时，会作为“空评论”显示。评论区会优先展示“我的评论”，再展示高分、中分、低分评论摘要，并支持翻页查看全部评分评论。
+
+首页热门区域使用 `/api/movies/hot/boards`：
+- 按电影主类型标签划分榜单，主类型取 `genres` 中的第一个标签。
+- 热门排序指标是评分记录数 `rating_count`，不是平均评分。
+- 平均分只作为榜单条目的辅助参考信息。
+- 总榜和各类型分榜都展示 10 部电影，前端用按钮切换榜单。
+
+首页历史偏好区域使用 `/api/users/{user_id}/preference-profile`：
+- 支持 `window=all|year|quarter|month`，按全部、近一年、近 90 天、近 30 天切换。
+- 展示主类型偏好、用户主动打过的自由文本标签、看过电影上的自由文本标签合集、类似用户喜好和最近参与画像的历史电影。
+- MovieLens 10M 不包含导演字段，因此导演偏好会在 UI 中明确标记为当前数据不可用，不会伪造导演信息。
+
+说明：
+- `ml-1m` 数据集只有用户评分和评分时间，没有自由文本评论/标签。
+- 当前已导入的 MovieLens 10M 包含评分时间戳和用户自由文本标签，但没有导演、演员和长文本评论字段。
+- 如果导入的 MovieLens 压缩包内包含 `tags.csv`，脚本会写入 `movie_tags` 表，详情页会自动展示用户自由文本标签合集。
+- 项目内置了若干热门电影的 TMDb 公共海报 URL；未匹配到真实海报的影片继续使用本地 SVG 海报兜底。
 
 ## 临时公网访问
 
 课程答辩或临时演示时，可以使用 [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/) 将本地前端映射为公网 HTTPS 地址。外部请求会经过 Cloudflare 加密隧道转发到本机 Vite 服务，不需要公网 IP、路由器端口映射或开放入站端口。
 
+如果服务器没有 `sudo` 权限，可以把 `cloudflared` 单文件下载到项目内：
+
+```bash
+mkdir -p .tools/cloudflared
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+  -o .tools/cloudflared/cloudflared
+chmod +x .tools/cloudflared/cloudflared
+.tools/cloudflared/cloudflared --version
+```
+
 保持前端和后端服务运行，在第三个终端中执行：
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:5173
+.tools/cloudflared/cloudflared tunnel --url http://127.0.0.1:5173
 ```
 
 终端会输出类似以下地址：
@@ -229,7 +288,13 @@ cloudflared tunnel --url http://127.0.0.1:5173
 https://random-name.trycloudflare.com
 ```
 
-手机或其他设备直接打开该 HTTPS 地址即可。如果 Vite 实际使用 `5174` 等其他端口，请同步修改 `cloudflared` 命令中的端口。
+当前演示隧道输出的访问地址是：
+
+```text
+https://margin-synopsis-sherman-sean.trycloudflare.com
+```
+
+手机或其他设备直接打开该 HTTPS 地址即可。如果 Vite 实际使用 `5174` 等其他端口，请同步修改 `cloudflared` 命令中的端口。Quick Tunnel 地址是临时随机地址，每次重启隧道后可能会变化，请以终端最新输出为准。
 
 ### 实验室服务器
 
@@ -241,7 +306,7 @@ https://random-name.trycloudflare.com
 - 如果 UDP 受限，可以显式使用 HTTP/2：
 
 ```bash
-cloudflared tunnel --protocol http2 --url http://127.0.0.1:5173
+.tools/cloudflared/cloudflared tunnel --protocol http2 --url http://127.0.0.1:5173
 ```
 
 ### 安全注意事项

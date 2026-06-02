@@ -12,9 +12,11 @@ def build_services():
         dataset["users"],
         dataset["movies"],
         dataset["ratings"],
+        dataset.get("movie_tags", []),
         dataset["model_metrics"],
         dataset["ablation_results"],
         data_source=dataset["data_source"],
+        db_path=dataset.get("db_path"),
     )
     recommendation_service = RecommendationService(
         dataset["movies"],

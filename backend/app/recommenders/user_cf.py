@@ -68,3 +68,9 @@ class UserCFRecommender(BaseRecommender):
             movie["support"] = round(support, 4)
             results.append(movie)
         return results
+
+    def record_rating(self, user_id, movie_id, rating):
+        self.user_ratings.setdefault(user_id, {})[movie_id] = float(rating)
+
+    def delete_rating(self, user_id, movie_id):
+        self.user_ratings.get(user_id, {}).pop(movie_id, None)

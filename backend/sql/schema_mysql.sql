@@ -21,6 +21,17 @@ CREATE TABLE ratings (
     movie_id INT NOT NULL,
     rating DECIMAL(2,1) NOT NULL,
     rated_at DATETIME,
+    comment TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(user_id),
+    FOREIGN KEY (movie_id) REFERENCES movies(movie_id)
+);
+
+CREATE TABLE movie_tags (
+    tag_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    movie_id INT NOT NULL,
+    tag VARCHAR(255) NOT NULL,
+    tagged_at DATETIME,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
     FOREIGN KEY (movie_id) REFERENCES movies(movie_id)
 );

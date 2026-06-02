@@ -58,9 +58,18 @@ def seed_movies(connection):
 def seed_ratings(connection):
     query = """
     INSERT INTO ratings (user_id, movie_id, rating, rated_at)
-    VALUES (?, ?, ?, NULL)
+    VALUES (?, ?, ?, ?)
     """
-    rows = [(item["user_id"], item["movie_id"], item["rating"]) for item in RATINGS]
+    rows = []
+    for index, item in enumerate(RATINGS):
+        rows.append(
+            (
+                item["user_id"],
+                item["movie_id"],
+                item["rating"],
+                "2026-05-%02d" % (12 + (index % 18)),
+            )
+        )
     connection.executemany(query, rows)
 
 
