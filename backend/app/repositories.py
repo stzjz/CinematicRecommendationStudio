@@ -2,6 +2,7 @@ import os
 import sqlite3
 
 from app.poster_catalog import poster_url_for_movie
+from app.movie_metadata import occupation_label_for_user, summary_for_movie
 from app.sample_data import ABLATION_RESULTS, MODEL_METRICS, MOVIES, RATINGS, USERS
 
 
@@ -80,6 +81,7 @@ class SQLiteRepository(object):
         rating_columns = [row["name"] for row in connection.execute("PRAGMA table_info(ratings)").fetchall()]
         if "comment" not in rating_columns:
             connection.execute("ALTER TABLE ratings ADD COLUMN comment TEXT")
+        self._ensure_movie_summaries(connection)
         stat_count = connection.execute("SELECT COUNT(*) AS count FROM movie_rating_stats").fetchone()["count"]
         if stat_count == 0:
             connection.execute(
@@ -93,6 +95,22 @@ class SQLiteRepository(object):
             connection.execute("CREATE INDEX IF NOT EXISTS idx_movie_rating_stats_count ON movie_rating_stats(rating_count DESC)")
         connection.commit()
 
+    def _ensure_movie_summaries(self, connection):
+        rows = connection.execute(
+            """
+            SELECT movie_id, title, year, summary
+            FROM movies
+            WHERE summary IS NULL OR TRIM(summary) = ''
+            """
+        ).fetchall()
+        updates = []
+        for row in rows:
+            summary = summary_for_movie(row["title"], row["year"], row["summary"])
+            if summary:
+                updates.append((summary, row["movie_id"]))
+        if updates:
+            connection.executemany("UPDATE movies SET summary = ? WHERE movie_id = ?", updates)
+
     def _fetch_users(self, connection):
         query = """
         SELECT user_id, username, age, gender, occupation
@@ -100,7 +118,12 @@ class SQLiteRepository(object):
         ORDER BY user_id
         """
         rows = connection.execute(query).fetchall()
-        return [dict(row) for row in rows]
+        users = []
+        for row in rows:
+            user = dict(row)
+            user["occupation"] = occupation_label_for_user(user["user_id"], user.get("occupation"))
+            users.append(user)
+        return users
 
     def _fetch_movies(self, connection):
         query = """
@@ -114,6 +137,7 @@ class SQLiteRepository(object):
             movie = dict(row)
             movie["genres"] = _normalize_genres(movie.get("genres"))
             movie["poster_url"] = poster_url_for_movie(movie.get("title"), movie.get("year"), movie.get("poster_url"))
+            movie["summary"] = summary_for_movie(movie.get("title"), movie.get("year"), movie.get("summary"))
             movies.append(movie)
         return movies
 

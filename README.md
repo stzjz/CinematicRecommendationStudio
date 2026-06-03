@@ -29,10 +29,11 @@ CinematicRecommendationStudio/
 
 - 把原来的项目说明迁移到 `docs/experiment_plan.md`
 - 新建后端原型，统一了推荐接口结构
-- 实现 3 个可直接作为比较基线的推荐算法
+- 实现 4 个可直接在 UI 中切换的推荐算法
   - `popularity`: 热门推荐
   - `user_cf`: 基于用户的协同过滤
   - `content_based`: 基于类型标签的内容推荐
+  - `lightgcn`: 接入 `BigDataHomework/LightGCN/` 中的 MovieLens-1M checkpoint
 - 补充了数据库 schema 草案
 - 打通了 `SQLite` 数据源加载与初始化脚本
 - 新建了 `React + Vite` 前端项目，并接入现有推荐接口
@@ -51,7 +52,7 @@ CinematicRecommendationStudio/
 - `score`: 排序分数
 - `meta`: 算法说明和可扩展字段
 
-这样后续接入 `NeuMF`、`LightGCN` 时，前端不用改接口消费方式，只需要切换算法名。
+这样后续接入 `NeuMF` 等新模型时，前端不用改接口消费方式，只需要切换算法名。
 
 ## 环境配置
 
@@ -71,6 +72,18 @@ python3 -m venv .venv
 ```
 
 不需要激活虚拟环境，后续命令会直接调用 `.venv/bin` 中的 Python 工具。
+
+LightGCN checkpoint 推理需要 PyTorch 和 NumPy，也安装在同一个本地虚拟环境中：
+
+```bash
+.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/python -m pip install numpy
+```
+
+当前接入的 checkpoint：
+- 路径：`../BigDataHomework/LightGCN/code/checkpoints/lgn-ml-1m-4-64.pth.tar`
+- 参数：`--dataset=ml-1m --layer=4 --seed=2026 --recdim=64`
+- 后端会读取 `../BigDataHomework/LightGCN/data/ml-1m/s_pre_adj_mat.npz`，用 4 层 LightGCN 图传播后的用户/电影 embedding 做排序。
 
 ### 前端环境
 
@@ -254,6 +267,7 @@ PATH="$PWD/.tools/node/bin:$PATH" npm --prefix frontend run build
 首页历史偏好区域使用 `/api/users/{user_id}/preference-profile`：
 - 支持 `window=all|year|quarter|month`，按全部、近一年、近 90 天、近 30 天切换。
 - 展示主类型偏好、用户主动打过的自由文本标签、看过电影上的自由文本标签合集、类似用户喜好和最近参与画像的历史电影。
+- 当算法切换为 `lightgcn` 时，会展示用户节点、4 层图传播、推荐电影节点、checkpoint 参数、用户 index、电影 item index 和传播分数。
 - MovieLens 10M 不包含导演字段，因此导演偏好会在 UI 中明确标记为当前数据不可用，不会伪造导演信息。
 
 说明：
@@ -291,7 +305,7 @@ https://random-name.trycloudflare.com
 当前演示隧道输出的访问地址是：
 
 ```text
-https://margin-synopsis-sherman-sean.trycloudflare.com
+https://tray-seller-employee-resume.trycloudflare.com
 ```
 
 手机或其他设备直接打开该 HTTPS 地址即可。如果 Vite 实际使用 `5174` 等其他端口，请同步修改 `cloudflared` 命令中的端口。Quick Tunnel 地址是临时随机地址，每次重启隧道后可能会变化，请以终端最新输出为准。
@@ -355,7 +369,5 @@ cd backend
 
 ## 下一步建议
 
-1. 先让前端按现有接口把页面骨架接起来。
-2. 把 MovieLens 数据清洗后导入 `SQLite`，先跑通真实数据链路。
-3. 用真实离线结果替换当前样例数据。
-4. 再接入 `NeuMF` 和 `LightGCN` 作为正式模型。
+1. 如果继续做正式模型对比，可以接入 `NeuMF` 或更多 checkpoint。
+2. 如果提供 MovieLens 原始 movieId 与 LightGCN item index 的显式映射文件，可以替换当前按电影排序的 item 映射，让 LightGCN 推荐结果和 UI 电影 ID 完全精确对应。

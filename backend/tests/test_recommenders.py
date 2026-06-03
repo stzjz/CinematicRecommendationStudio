@@ -12,7 +12,7 @@ class RecommendationServiceTest(unittest.TestCase):
 
     def test_supported_algorithms(self):
         names = [item["name"] for item in self.service.list_algorithms()]
-        self.assertEqual(sorted(names), ["content_based", "popularity", "user_cf"])
+        self.assertEqual(sorted(names), ["content_based", "lightgcn", "popularity", "user_cf"])
 
     def test_popularity_recommendation(self):
         result = self.service.recommend(user_id=1, algorithm="popularity", limit=3)

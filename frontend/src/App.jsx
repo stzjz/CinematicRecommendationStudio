@@ -54,6 +54,7 @@ export default function App() {
   const [hotMovieBoards, setHotMovieBoards] = useState([]);
   const [selectedHotBoard, setSelectedHotBoard] = useState(TOTAL_BOARD_KEY);
   const [recommendations, setRecommendations] = useState([]);
+  const [recommendationMeta, setRecommendationMeta] = useState(null);
   const [history, setHistory] = useState([]);
   const [preferenceProfile, setPreferenceProfile] = useState(null);
   const [selectedPreferenceWindow, setSelectedPreferenceWindow] = useState('all');
@@ -154,6 +155,7 @@ export default function App() {
         }
 
         setRecommendations(recommendationRes.items || []);
+        setRecommendationMeta(recommendationRes.meta || null);
         setHistory(historyRes.items || []);
         setPreferenceProfile(preferenceRes || null);
       } catch (err) {
@@ -439,6 +441,7 @@ export default function App() {
               profile={preferenceProfile}
               history={history}
               recommendations={recommendations}
+              recommendationMeta={recommendationMeta}
               algorithm={selectedAlgorithm}
               selectedWindow={selectedPreferenceWindow}
               onWindowChange={setSelectedPreferenceWindow}
@@ -496,11 +499,12 @@ export default function App() {
   );
 }
 
-function PreferenceProfilePanel({ profile, history, recommendations, algorithm, selectedWindow, onWindowChange, loading }) {
+function PreferenceProfilePanel({ profile, history, recommendations, recommendationMeta, algorithm, selectedWindow, onWindowChange, loading }) {
   const topGenres = profile?.genres || [];
   const authoredTags = profile?.authored_tags || [];
   const movieTags = profile?.movie_tags || [];
   const similarUsers = profile?.similar_users || [];
+  const interactionGraph = profile?.interaction_graph || { nodes: [], edges: [] };
   const topHistory = profile?.top_history?.length ? profile.top_history : history.slice(0, 5);
   const maxGenreScore = Math.max(...topGenres.map((item) => item.score || 0), 1);
   const recommendedMovies = recommendations || [];
@@ -527,10 +531,13 @@ function PreferenceProfilePanel({ profile, history, recommendations, algorithm, 
         }, { cursor: 0, parts: [] }).parts.join(', ')})`
       : 'rgba(255,255,255,0.06)',
   };
-  const ratingColumns = [5, 4, 3, 2, 1].map((score) => ({
-    score,
-    count: topHistory.filter((movie) => Math.round(Number(movie.rating || 0)) === score).length,
-  }));
+  const ratingColumns = profile?.rating_distribution?.length
+    ? profile.rating_distribution
+    : [5, 4, 3, 2, 1].map((score) => ({
+        rating: score,
+        label: String(score),
+        count: topHistory.filter((movie) => Math.round(Number(movie.rating || 0)) === score).length,
+      }));
   const maxRatingColumn = Math.max(...ratingColumns.map((item) => item.count), 1);
   const recommendedGenreData = Object.entries(recommendedGenreCounts)
     .map(([label, count]) => ({ label, count }))
@@ -549,6 +556,10 @@ function PreferenceProfilePanel({ profile, history, recommendations, algorithm, 
     popularity: {
       label: '热度校准视图',
       description: '当前算法偏向全站热度，这里用用户历史高分片和热门候选做对照。',
+    },
+    lightgcn: {
+      label: '图传播视图',
+      description: 'LightGCN 只保留用户-电影二部图上的邻域聚合，用 4 层传播把历史交互扩散到候选电影。',
     },
   };
   const activeMode = modeCopy[algorithm] || {
@@ -587,12 +598,12 @@ function PreferenceProfilePanel({ profile, history, recommendations, algorithm, 
 
       <article className="chart-card column-card">
         <h3>历史评分柱状图</h3>
-        <p>显示用户评分习惯；高分历史会影响类型权重和相似用户匹配。</p>
-        <div className="rating-columns">
+        <p>按当前时间窗口内的全部历史评分统计；用于解释评分习惯和画像权重。</p>
+        <div className="rating-columns" style={{ gridTemplateColumns: `repeat(${ratingColumns.length}, minmax(0, 1fr))` }}>
           {ratingColumns.map((item) => (
-            <div key={item.score}>
+            <div key={item.label || item.rating}>
               <i style={{ height: `${Math.max((item.count / maxRatingColumn) * 100, item.count ? 12 : 2)}%` }} />
-              <span>{item.score}星</span>
+              <span>{item.label || item.rating}</span>
               <em>{item.count}</em>
             </div>
           ))}
@@ -694,7 +705,20 @@ function PreferenceProfilePanel({ profile, history, recommendations, algorithm, 
         </>
       ) : null}
 
-      {!['content_based', 'user_cf', 'popularity'].includes(algorithm) ? (
+      {algorithm === 'lightgcn' ? (
+        <>
+        <p className="principle-caption">checkpoint 参数：dataset={recommendationMeta?.dataset || 'ml-1m'}，layer={recommendationMeta?.layer || 4}，recdim={recommendationMeta?.recdim || 64}，seed={recommendationMeta?.seed || 2026}。当前状态：{recommendationMeta?.checkpoint_status || 'unknown'}。</p>
+        <LightGCNKnowledgeGraph graph={interactionGraph} recommendations={recommendedMovies} />
+        <div className="lightgcn-edge-summary">
+          <span>采样边：{interactionGraph.edges.length}</span>
+          <span>传播层：4</span>
+          <span>实际推荐 item：{recommendedMovies.slice(0, 3).map((movie) => movie.lightgcn_item_index ?? '-').join(' / ')}</span>
+        </div>
+        {recommendationMeta?.checkpoint_error ? <p className="principle-caption">{recommendationMeta.checkpoint_error}</p> : null}
+        </>
+      ) : null}
+
+      {!['content_based', 'user_cf', 'popularity', 'lightgcn'].includes(algorithm) ? (
         <div className="empty-card">当前算法暂未配置专属解释图。</div>
       ) : null}
     </section>
@@ -798,6 +822,7 @@ function PreferenceProfilePanel({ profile, history, recommendations, algorithm, 
     content_based: [chartOverviewSection, principleSection, genreSection, movieTagSection, authoredTagSection, historySection, similarUserSection, directorSection],
     user_cf: [chartOverviewSection, principleSection, similarUserSection, historySection, genreSection, movieTagSection, authoredTagSection, directorSection],
     popularity: [chartOverviewSection, principleSection, historySection, genreSection, movieTagSection, similarUserSection, authoredTagSection, directorSection],
+    lightgcn: [chartOverviewSection, principleSection, historySection, similarUserSection, genreSection, movieTagSection, authoredTagSection, directorSection],
   }[algorithm] || [chartOverviewSection, principleSection, genreSection, movieTagSection, authoredTagSection, similarUserSection, historySection, directorSection];
 
   return (
@@ -838,6 +863,235 @@ function PreferenceProfilePanel({ profile, history, recommendations, algorithm, 
       ) : null}
 
       {orderedSections}
+    </div>
+  );
+}
+
+function LightGCNKnowledgeGraph({ graph, recommendations }) {
+  const historyNodes = (graph.nodes || []).filter((node) => node.type === 'history_movie').slice(0, 5);
+  const neighborNodes = (graph.nodes || []).filter((node) => node.type === 'neighbor_user').slice(0, 4);
+  const recommendationMovieIds = new Set((recommendations || []).slice(0, 6).map((movie) => String(movie.movie_id)));
+  const candidateNodes = (graph.nodes || [])
+    .filter((node) => node.type === 'candidate_movie')
+    .filter((node) => !recommendationMovieIds.has(String(node.id).replace('c-', '')));
+  const recommendationNodes = (recommendations || []).slice(0, 6).map((movie, index) => ({
+    id: `r-${movie.movie_id}`,
+    type: 'recommended_movie',
+    label: movie.title,
+    subtitle: `Top ${index + 1} · item ${movie.lightgcn_item_index ?? '-'} · ${Number(movie.score || 0).toFixed(2)}`,
+  }));
+  const graphKey = [
+    graph.nodes?.map((node) => node.id).join(',') || '',
+    recommendationNodes.map((node) => node.id).join(','),
+  ].join('|');
+  const [dragging, setDragging] = useState(null);
+  const [positions, setPositions] = useState({});
+  const [activeNodeId, setActiveNodeId] = useState('');
+
+  function latticeNodes(nodes, startX, startY, gapX, gapY, columns, sway = 0) {
+    return nodes.map((node, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      const wave = Math.sin((index + 1) * 1.7) * sway;
+      return {
+        ...node,
+        x: startX + col * gapX + wave,
+        y: startY + row * gapY - wave * 0.35,
+      };
+    });
+  }
+
+  const initialNodes = [
+    { id: 'target', type: 'target_user', label: '当前用户', subtitle: graph.nodes?.find((node) => node.type === 'target_user')?.subtitle || '', x: 43, y: 52 },
+    ...latticeNodes(historyNodes, 19, 31, 13, 15, 2, 2.2),
+    ...latticeNodes(neighborNodes, 44, 25, 14, 17, 2, 2),
+    ...latticeNodes(candidateNodes, 62, 56, 13, 12, 3, 1.8),
+    ...latticeNodes(recommendationNodes, 72, 25, 13, 14, 2, 1.7),
+  ];
+  const positionedNodes = initialNodes.map((node) => ({ ...node, ...(positions[node.id] || {}) }));
+
+  const byId = Object.fromEntries(positionedNodes.map((node) => [node.id, node]));
+  const neighborSources = neighborNodes.length ? neighborNodes : historyNodes;
+  const maxRecommendationScore = Math.max(...(recommendations || []).slice(0, 6).map((movie) => Math.abs(Number(movie.score || 0))), 1);
+  const nodeStats = [
+    { label: '历史', value: historyNodes.length, type: 'history_movie' },
+    { label: '邻居', value: neighborNodes.length, type: 'neighbor_user' },
+    { label: '候选', value: candidateNodes.length, type: 'candidate_movie' },
+    { label: '推荐', value: recommendationNodes.length, type: 'recommended_movie' },
+  ];
+  const edges = [
+    ...historyNodes.map((node) => ({ source: 'target', target: node.id, type: 'history', strength: 0.88 })),
+    ...neighborNodes.map((node, index) => ({ source: 'target', target: node.id, type: 'neighbor', bend: index % 2 ? 1 : -1, strength: 0.72 })),
+    ...historyNodes.flatMap((historyNode, index) =>
+      neighborNodes.slice(0, 3).map((neighborNode) => ({ source: historyNode.id, target: neighborNode.id, type: 'neighbor', bend: index % 2 ? -1 : 1, strength: 0.58 }))
+    ),
+    ...candidateNodes.flatMap((candidateNode, index) =>
+      (neighborSources.length ? neighborSources.slice(index % Math.max(neighborSources.length, 1), index % Math.max(neighborSources.length, 1) + 2) : [{ id: 'target' }])
+        .filter((sourceNode) => sourceNode.id !== candidateNode.id)
+        .map((sourceNode) => ({ source: sourceNode.id, target: candidateNode.id, type: 'candidate', bend: index % 2 ? 1 : -1, strength: 0.5 }))
+    ),
+    ...recommendationNodes.flatMap((recNode, index) =>
+      (neighborSources.length ? neighborSources.slice(0, 3) : [{ id: 'target' }])
+        .filter((sourceNode) => sourceNode.id !== recNode.id)
+        .map((sourceNode) => ({ source: sourceNode.id, target: recNode.id, type: 'rank', bend: index % 2 ? -1 : 1, strength: 0.78 }))
+    ),
+  ].filter((edge) => byId[edge.source] && byId[edge.target]);
+  const activeNode = activeNodeId ? byId[activeNodeId] : null;
+  const connectedNodeIds = new Set(
+    activeNodeId
+      ? edges
+          .filter((edge) => edge.source === activeNodeId || edge.target === activeNodeId)
+          .flatMap((edge) => [edge.source, edge.target])
+      : []
+  );
+
+  function pathFor(edge) {
+    const source = byId[edge.source];
+    const target = byId[edge.target];
+    const midX = (source.x + target.x) / 2;
+    const bend = edge.bend || 0;
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const distance = Math.max(Math.hypot(dx, dy), 1);
+    const curveX = midX - (dy / distance) * bend * 6;
+    const curveY = (source.y + target.y) / 2 + (dx / distance) * bend * 6;
+    return `M ${source.x} ${source.y} Q ${curveX} ${curveY} ${target.x} ${target.y}`;
+  }
+
+  useEffect(() => {
+    setPositions({});
+    setDragging(null);
+  }, [graphKey]);
+
+  function pointFromEvent(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * 100,
+      y: ((event.clientY - rect.top) / rect.height) * 100,
+    };
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function handlePointerMove(event) {
+    if (!dragging) {
+      return;
+    }
+    const point = pointFromEvent(event);
+    setPositions((current) => ({
+      ...current,
+      [dragging.id]: {
+        x: clamp(point.x + dragging.offsetX, 6, 94),
+        y: clamp(point.y + dragging.offsetY, 8, 92),
+      },
+    }));
+  }
+
+  function edgeClass(edge) {
+    const isActive = activeNodeId && (edge.source === activeNodeId || edge.target === activeNodeId);
+    const isFaded = activeNodeId && !isActive;
+    return `edge-${edge.type}${isActive ? ' is-active' : ''}${isFaded ? ' is-faded' : ''}`;
+  }
+
+  function handlePointerDown(event, node) {
+    const graphElement = event.currentTarget.closest('.knowledge-graph');
+    if (!graphElement) {
+      return;
+    }
+    const rect = graphElement.getBoundingClientRect();
+    const point = {
+      x: ((event.clientX - rect.left) / rect.width) * 100,
+      y: ((event.clientY - rect.top) / rect.height) * 100,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDragging({ id: node.id, offsetX: node.x - point.x, offsetY: node.y - point.y });
+  }
+
+  return (
+    <div
+      className={`knowledge-graph ${dragging ? 'is-dragging' : ''}`}
+      onPointerMove={handlePointerMove}
+      onPointerUp={() => setDragging(null)}
+      onPointerCancel={() => setDragging(null)}
+      onPointerLeave={() => {
+        setDragging(null);
+        setActiveNodeId('');
+      }}
+    >
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <filter id="kg-line-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.35" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <path className="kg-current-field" d="M 8 79 C 28 41 49 24 91 12" />
+        <path className="kg-current-field second" d="M 7 23 C 32 70 58 83 94 62" />
+        {edges.map((edge, index) => (
+          <path
+            key={`${edge.source}-${edge.target}-${index}`}
+            className={edgeClass(edge)}
+            d={pathFor(edge)}
+            style={{ '--edge-strength': edge.strength || 0.55 }}
+          />
+        ))}
+        {edges.filter((edge) => activeNodeId && (edge.source === activeNodeId || edge.target === activeNodeId)).map((edge, index) => {
+          const target = byId[edge.target];
+          return <circle key={`pulse-${edge.target}-${index}`} className={`kg-edge-pulse edge-${edge.type}`} cx={target.x} cy={target.y} r="0.9" />;
+        })}
+      </svg>
+      <div className="kg-panel kg-stats">
+        <strong>图谱结构</strong>
+        <div className="kg-stat-grid">
+          {nodeStats.map((item) => (
+            <span key={item.type} className={item.type}>
+              <em>{item.value}</em>
+              {item.label}
+            </span>
+          ))}
+        </div>
+      </div>
+      {positionedNodes.map((node) => (
+        <div
+          key={node.id}
+          className={`kg-node ${node.type}`}
+          style={{ left: `${node.x}%`, top: `${node.y}%` }}
+          title={`${node.label} ${node.subtitle || ''}`}
+          data-related={activeNodeId ? connectedNodeIds.has(node.id) : true}
+          onPointerEnter={() => setActiveNodeId(node.id)}
+          onPointerDown={(event) => handlePointerDown(event, node)}
+        >
+          <strong>{node.label}</strong>
+          <span>{node.subtitle}{node.occupation ? ` · ${node.occupation}` : ''}</span>
+        </div>
+      ))}
+      <div className="kg-panel kg-focus-panel">
+        <strong>{activeNode ? '当前选中节点' : '交互提示'}</strong>
+        <p>{activeNode ? activeNode.label : '拖动节点调整图谱，悬停节点会高亮它参与的传播路径。'}</p>
+        {activeNode?.subtitle ? <span>{activeNode.subtitle}</span> : null}
+        <button type="button" onClick={() => setPositions({})}>重置布局</button>
+      </div>
+      <div className="kg-panel kg-score-panel">
+        <strong>LightGCN Top 分数</strong>
+        {(recommendations || []).slice(0, 5).map((movie, index) => (
+          <div className="kg-score-row" key={movie.movie_id}>
+            <span>{index + 1}. {movie.title}</span>
+            <b><i style={{ width: `${Math.max((Math.abs(Number(movie.score || 0)) / maxRecommendationScore) * 100, 6)}%` }} /></b>
+            <em>{Number(movie.score || 0).toFixed(2)}</em>
+          </div>
+        ))}
+      </div>
+      <div className="kg-legend">
+        <span>历史电影</span>
+        <span>邻居用户</span>
+        <span>候选池电影</span>
+        <span>最终推荐电影</span>
+      </div>
     </div>
   );
 }
@@ -1244,9 +1498,10 @@ function MovieDetailPage({ movie, loading, error, users, selectedUser, onRatingC
         comment: ratingForm.comment,
       }
     : null;
-  const highComments = ratingRecords.filter((record) => Number(record.rating) >= 4).slice(0, 2);
-  const mediumComments = ratingRecords.filter((record) => Number(record.rating) >= 2.5 && Number(record.rating) < 4).slice(0, 2);
-  const lowComments = ratingRecords.filter((record) => Number(record.rating) < 2.5).slice(0, 2);
+  const sampleComments = movie?.comment_samples || {};
+  const highComments = sampleComments.high || ratingRecords.filter((record) => Number(record.rating) >= 4).slice(0, 2);
+  const mediumComments = sampleComments.medium || ratingRecords.filter((record) => Number(record.rating) >= 2.5 && Number(record.rating) < 4).slice(0, 2);
+  const lowComments = sampleComments.low || ratingRecords.filter((record) => Number(record.rating) < 2.5).slice(0, 2);
   const totalCommentPages = Math.max(Math.ceil(commentTotal / COMMENT_PAGE_SIZE), 1);
 
   useEffect(() => {
@@ -1507,9 +1762,9 @@ function MovieDetailPage({ movie, loading, error, users, selectedUser, onRatingC
                 <h2>精选评论</h2>
                 {ratingRecords.length ? (
                   <div className="comment-buckets">
-                    <CommentBucket title="高分评论" records={highComments} renderCommentCard={renderCommentCard} />
-                    <CommentBucket title="中分评论" records={mediumComments} renderCommentCard={renderCommentCard} />
-                    <CommentBucket title="低分评论" records={lowComments} renderCommentCard={renderCommentCard} />
+                    <CommentBucket title="高分评论" range="4.0 - 5.0" tone="high" records={highComments} renderCommentCard={renderCommentCard} />
+                    <CommentBucket title="中分评论" range="2.5 - 3.5" tone="medium" records={mediumComments} renderCommentCard={renderCommentCard} />
+                    <CommentBucket title="低分评论" range="0.5 - 2.0" tone="low" records={lowComments} renderCommentCard={renderCommentCard} />
                   </div>
                 ) : (
                   <div className="empty-card">这部电影暂时没有评分记录。</div>
@@ -1549,10 +1804,13 @@ function MovieDetailPage({ movie, loading, error, users, selectedUser, onRatingC
   );
 }
 
-function CommentBucket({ title, records, renderCommentCard }) {
+function CommentBucket({ title, range, tone, records, renderCommentCard }) {
   return (
-    <div className="comment-bucket">
-      <h3>{title}</h3>
+    <div className={`comment-bucket ${tone || ''}`}>
+      <div className="comment-bucket-head">
+        <h3>{title}</h3>
+        <span>{range}</span>
+      </div>
       <div className="comment-list compact">
         {records.map((record) => renderCommentCard(record))}
         {!records.length ? <div className="empty-card">暂无这一档评分评论。</div> : null}

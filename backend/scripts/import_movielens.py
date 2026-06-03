@@ -13,6 +13,7 @@ if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
 from app.config import DEFAULT_DB_PATH
+from app.movie_metadata import summary_for_movie
 from app.poster_catalog import poster_url_for_movie
 from scripts.init_sqlite import ensure_parent, load_schema, seed_ablation_results, seed_model_metrics
 
@@ -105,7 +106,7 @@ def _seed_movies(connection, archive):
         movie_id, raw_title, genres = line.split("::")
         title, year = _parse_title(raw_title)
         fallback_poster = "/api/posters/%s.svg" % movie_id
-        rows.append((int(movie_id), title, year, poster_url_for_movie(title, year, fallback_poster), "", genres))
+        rows.append((int(movie_id), title, year, poster_url_for_movie(title, year, fallback_poster), summary_for_movie(title, year), genres))
 
     connection.executemany(
         """
@@ -131,7 +132,7 @@ def _seed_csv_movies(connection, archive):
                     title,
                     year,
                     poster_url_for_movie(title, year, fallback_poster),
-                    "",
+                    summary_for_movie(title, year),
                     item["genres"],
                 )
             )

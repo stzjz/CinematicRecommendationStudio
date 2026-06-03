@@ -3,6 +3,7 @@ import math
 import sqlite3
 import time
 
+from app.movie_metadata import occupation_label_for_user, summary_for_movie
 from app.poster_catalog import poster_url_for_movie
 
 
@@ -35,9 +36,18 @@ class CatalogService(object):
         self.user_genre_vectors = {}
 
     def list_users(self, limit=None):
+        if self.db_path:
+            sql = "SELECT user_id, username, age, gender, occupation FROM users ORDER BY user_id DESC"
+            params = ()
+            if limit is not None:
+                sql += " LIMIT ?"
+                params = (limit,)
+            with self._connect() as connection:
+                rows = connection.execute(sql, params).fetchall()
+            return [self._display_user(dict(row)) for row in rows]
         if limit is None:
             return self.users
-        return self.users[:limit]
+        return list(reversed(self.users[-limit:]))
 
     def create_user(self, username, age=None, gender=None, occupation=None):
         clean_username = (username or "").strip()
@@ -64,7 +74,7 @@ class CatalogService(object):
 
         self.users.append(user)
         self.user_map[user["user_id"]] = user
-        return user
+        return self._display_user(user)
 
     def _next_user_id(self):
         if self.db_path:
@@ -76,7 +86,16 @@ class CatalogService(object):
     def _with_real_poster(self, movie):
         item = dict(movie)
         item["poster_url"] = poster_url_for_movie(item.get("title"), item.get("year"), item.get("poster_url"))
+        item["summary"] = summary_for_movie(item.get("title"), item.get("year"), item.get("summary"))
         return item
+
+    def _display_user(self, user):
+        item = dict(user)
+        item["occupation"] = occupation_label_for_user(item.get("user_id"), item.get("occupation"))
+        return item
+
+    def _occupation_for_user(self, user_id, occupation):
+        return occupation_label_for_user(user_id, occupation)
 
     def list_hot_movies(self, limit=10):
         if self.db_path:
@@ -307,6 +326,7 @@ class CatalogService(object):
         detail["rating_count"] = len(movie_ratings)
         detail["rating_distribution"] = self._build_rating_distribution(movie_ratings)
         detail["rating_records"] = self._build_movie_rating_records(movie, movie_ratings, limit=120)
+        detail["comment_samples"] = self._build_comment_samples(movie, movie_ratings)
         detail["user_tags"] = self._build_user_tag_summary(movie_id)
         return detail
 
@@ -326,7 +346,7 @@ class CatalogService(object):
                     FROM ratings r
                     LEFT JOIN users u ON u.user_id = r.user_id
                     WHERE r.movie_id = ?
-                    ORDER BY r.rating DESC, r.user_id
+                    ORDER BY CAST(COALESCE(r.rated_at, '0') AS INTEGER) DESC, r.user_id
                     LIMIT ? OFFSET ?
                     """,
                     (movie_id, limit, offset),
@@ -336,7 +356,7 @@ class CatalogService(object):
                     "record_id": "%s-%s" % (movie_id, row["user_id"]),
                     "user_id": row["user_id"],
                     "username": row["username"] or "user-%s" % row["user_id"],
-                    "occupation": row["occupation"],
+                    "occupation": self._occupation_for_user(row["user_id"], row["occupation"]),
                     "rating": row["rating"],
                     "rated_at": self._format_rating_date(row["rated_at"], offset + index),
                     "comment": row["comment"],
@@ -346,7 +366,7 @@ class CatalogService(object):
             return {"items": items, "total": int(total_row["total"] or 0)}
 
         movie_ratings = self.ratings_by_movie.get(movie_id, [])
-        sorted_ratings = sorted(movie_ratings, key=lambda item: (-item["rating"], item["user_id"]))
+        sorted_ratings = sorted(movie_ratings, key=lambda item: (-self._timestamp_value(item.get("rated_at")), item["user_id"]))
         return {
             "items": self._build_movie_rating_records(movie, sorted_ratings[offset : offset + limit], limit=limit, base_index=offset),
             "total": len(sorted_ratings),
@@ -415,11 +435,13 @@ class CatalogService(object):
             "window": window_info,
             "rating_count": len(selected_history),
             "rated_movie_count": len(rated_movie_ids),
+            "rating_distribution": self._build_exact_rating_distribution(selected_history),
             "genres": genres[:8],
             "authored_tags": authored_tags[:16],
             "movie_tags": movie_tags[:20],
             "similar_users": similar_users,
             "top_history": top_movie_items,
+            "interaction_graph": self._build_interaction_graph(user_id, selected_history, top_movie_items, similar_users),
             "director_status": {
                 "available": False,
                 "reason": "MovieLens 10M only includes movie title, release year, genres, ratings, timestamps, and user-supplied tags; it does not include director metadata.",
@@ -504,11 +526,16 @@ class CatalogService(object):
                 FROM ratings r
                 LEFT JOIN users u ON u.user_id = r.user_id
                 WHERE r.movie_id = ?
-                ORDER BY r.rating DESC, r.user_id
+                ORDER BY CAST(COALESCE(r.rated_at, '0') AS INTEGER) DESC, r.user_id
                 LIMIT 120
                 """,
                 (movie_id,),
             ).fetchall()
+            sample_rows = {
+                "high": connection.execute(self._comment_sample_query("rating >= 4"), (movie_id,)).fetchall(),
+                "medium": connection.execute(self._comment_sample_query("rating >= 2.5 AND rating < 4"), (movie_id,)).fetchall(),
+                "low": connection.execute(self._comment_sample_query("rating < 2.5"), (movie_id,)).fetchall(),
+            }
 
         distribution_map = dict((int(row["rating_bucket"]), row["count"]) for row in distribution_rows)
         detail = dict(movie)
@@ -521,15 +548,43 @@ class CatalogService(object):
                 "record_id": "%s-%s" % (movie_id, row["user_id"]),
                 "user_id": row["user_id"],
                 "username": row["username"] or "user-%s" % row["user_id"],
-                "occupation": row["occupation"],
+                "occupation": self._occupation_for_user(row["user_id"], row["occupation"]),
                 "rating": row["rating"],
                 "rated_at": self._format_rating_date(row["rated_at"], index),
                 "comment": row["comment"],
             }
             for index, row in enumerate(record_rows)
         ]
+        detail["comment_samples"] = {
+            key: [
+                {
+                    "record_id": "%s-%s-%s" % (movie_id, key, row["user_id"]),
+                    "user_id": row["user_id"],
+                    "username": row["username"] or "user-%s" % row["user_id"],
+                    "occupation": self._occupation_for_user(row["user_id"], row["occupation"]),
+                    "rating": row["rating"],
+                    "rated_at": self._format_rating_date(row["rated_at"], index),
+                    "comment": row["comment"],
+                }
+                for index, row in enumerate(rows)
+            ]
+            for key, rows in sample_rows.items()
+        }
         detail["user_tags"] = self._build_user_tag_summary(movie_id)
         return detail
+
+    def _comment_sample_query(self, rating_clause):
+        return """
+            SELECT r.user_id, r.rating, r.rated_at, r.comment, u.username, u.occupation
+            FROM ratings r
+            LEFT JOIN users u ON u.user_id = r.user_id
+            WHERE r.movie_id = ? AND %s
+            ORDER BY
+              CASE WHEN r.comment IS NOT NULL AND TRIM(r.comment) != '' THEN 0 ELSE 1 END,
+              CAST(COALESCE(r.rated_at, '0') AS INTEGER) DESC,
+              r.user_id
+            LIMIT 2
+        """ % rating_clause
 
     def _get_user_history_sql(self, user_id):
         query = """
@@ -583,11 +638,13 @@ class CatalogService(object):
             "window": self._resolve_window(window, all_history),
             "rating_count": len(selected_history),
             "rated_movie_count": len(rated_movie_ids),
+            "rating_distribution": self._build_exact_rating_distribution(selected_history),
             "genres": genres[:8],
             "authored_tags": authored_tags[:16],
             "movie_tags": movie_tags[:20],
             "similar_users": self._find_similar_users_sql(user_id, genre_scores, rated_movie_ids, limit=5),
             "top_history": top_movie_items,
+            "interaction_graph": self._build_interaction_graph_sql(user_id, selected_history, top_movie_items),
             "director_status": {
                 "available": False,
                 "reason": "MovieLens 10M only includes movie title, release year, genres, ratings, timestamps, and user-supplied tags; it does not include director metadata.",
@@ -605,6 +662,119 @@ class CatalogService(object):
                 item["comment"] = self._row_value(row, "comment")
                 results.append(item)
         return results
+
+    def _build_interaction_graph_sql(self, user_id, selected_history, top_movie_items):
+        seed_movies = top_movie_items[:5]
+        seed_ids = [movie["movie_id"] for movie in seed_movies]
+        if not seed_ids:
+            return {"nodes": [], "edges": []}
+
+        placeholders = ",".join("?" for _ in seed_ids)
+        with self._connect() as connection:
+            neighbor_rows = connection.execute(
+                """
+                SELECT r.user_id, u.username, u.occupation, COUNT(*) AS overlap_count, AVG(r.rating) AS avg_rating
+                FROM ratings r
+                LEFT JOIN users u ON u.user_id = r.user_id
+                WHERE r.movie_id IN (%s) AND r.user_id != ?
+                GROUP BY r.user_id
+                ORDER BY overlap_count DESC, avg_rating DESC, r.user_id
+                LIMIT 4
+                """ % placeholders,
+                tuple(seed_ids + [user_id]),
+            ).fetchall()
+            neighbor_ids = [row["user_id"] for row in neighbor_rows]
+            edge_rows = []
+            candidate_rows = []
+            if neighbor_ids:
+                neighbor_placeholders = ",".join("?" for _ in neighbor_ids)
+                edge_rows = connection.execute(
+                    """
+                    SELECT user_id, movie_id, rating
+                    FROM ratings
+                    WHERE user_id IN (%s) AND movie_id IN (%s)
+                    """ % (neighbor_placeholders, placeholders),
+                    tuple(neighbor_ids + seed_ids),
+                ).fetchall()
+                candidate_rows = connection.execute(
+                    """
+                    SELECT r.movie_id, COUNT(*) AS support, AVG(r.rating) AS avg_rating
+                    FROM ratings r
+                    WHERE r.user_id IN (%s) AND r.movie_id NOT IN (%s)
+                    GROUP BY r.movie_id
+                    ORDER BY support DESC, avg_rating DESC, r.movie_id
+                    LIMIT 8
+                    """ % (neighbor_placeholders, placeholders),
+                    tuple(neighbor_ids + seed_ids),
+                ).fetchall()
+
+        nodes = [{"id": "u-%s" % user_id, "type": "target_user", "label": "当前用户", "subtitle": "user %s" % user_id}]
+        edges = []
+        for movie in seed_movies:
+            movie_node = "m-%s" % movie["movie_id"]
+            nodes.append({"id": movie_node, "type": "history_movie", "label": movie["title"], "subtitle": "%.1f 分" % float(movie.get("rating") or 0)})
+            edges.append({"source": "u-%s" % user_id, "target": movie_node, "label": "历史评分"})
+
+        for row in neighbor_rows:
+            nodes.append(
+                {
+                    "id": "n-%s" % row["user_id"],
+                    "type": "neighbor_user",
+                    "label": row["username"] or "user-%s" % row["user_id"],
+                    "subtitle": "%s 个共同电影" % row["overlap_count"],
+                    "occupation": self._occupation_for_user(row["user_id"], row["occupation"]),
+                }
+            )
+        for row in edge_rows:
+            edges.append({"source": "m-%s" % row["movie_id"], "target": "n-%s" % row["user_id"], "label": "%.1f" % float(row["rating"])})
+
+        for row in candidate_rows:
+            movie = self.movie_map.get(row["movie_id"])
+            if not movie:
+                continue
+            candidate_node = "c-%s" % row["movie_id"]
+            nodes.append(
+                {
+                    "id": candidate_node,
+                    "type": "candidate_movie",
+                    "label": movie["title"],
+                    "subtitle": "%s 个邻居 · %.1f 分" % (row["support"], float(row["avg_rating"] or 0)),
+                }
+            )
+            for neighbor_id in neighbor_ids[:3]:
+                edges.append({"source": "n-%s" % neighbor_id, "target": candidate_node, "label": "传播"})
+
+        return {"nodes": nodes, "edges": edges}
+
+    def _build_interaction_graph(self, user_id, selected_history, top_movie_items, similar_users):
+        seed_movies = top_movie_items[:5]
+        seed_ids = [movie["movie_id"] for movie in seed_movies]
+        if not seed_ids:
+            return {"nodes": [], "edges": []}
+        neighbor_ids = [user["user_id"] for user in similar_users[:4]]
+        nodes = [{"id": "u-%s" % user_id, "type": "target_user", "label": "当前用户", "subtitle": "user %s" % user_id}]
+        edges = []
+        for movie in seed_movies:
+            movie_node = "m-%s" % movie["movie_id"]
+            nodes.append({"id": movie_node, "type": "history_movie", "label": movie["title"], "subtitle": "%.1f 分" % float(movie.get("rating") or 0)})
+            edges.append({"source": "u-%s" % user_id, "target": movie_node, "label": "历史评分"})
+        for user in similar_users[:4]:
+            neighbor_node = "n-%s" % user["user_id"]
+            nodes.append({"id": neighbor_node, "type": "neighbor_user", "label": user["username"], "subtitle": "%s 条评分" % user.get("rating_count", 0)})
+            for movie_id in seed_ids[:2]:
+                edges.append({"source": "m-%s" % movie_id, "target": neighbor_node, "label": "共同"})
+        candidates = []
+        for neighbor_id in neighbor_ids:
+            for row in self.ratings_by_user.get(neighbor_id, [])[:20]:
+                if row["movie_id"] not in seed_ids and row["movie_id"] in self.movie_map:
+                    candidates.append(row["movie_id"])
+        for movie_id in list(dict.fromkeys(candidates))[:5]:
+            movie = self.movie_map[movie_id]
+            candidate_node = "c-%s" % movie_id
+            nodes.append({"id": candidate_node, "type": "candidate_movie", "label": movie["title"], "subtitle": "邻居候选"})
+            for neighbor_id in neighbor_ids[:3]:
+                edges.append({"source": "n-%s" % neighbor_id, "target": candidate_node, "label": "传播"})
+        return {"nodes": nodes, "edges": edges}
 
     def _row_value(self, row, key, default=None):
         if hasattr(row, "keys") and key in row.keys():
@@ -649,7 +819,7 @@ class CatalogService(object):
                 {
                     "user_id": other_user_id,
                     "username": profile.get("username", "movielens-%s" % other_user_id),
-                    "occupation": profile.get("occupation"),
+                    "occupation": self._occupation_for_user(other_user_id, profile.get("occupation")),
                     "similarity": round(dot / (target_norm * other_norm), 3),
                     "rating_count": len(rows),
                 }
@@ -676,6 +846,15 @@ class CatalogService(object):
                     count += 1
             buckets.append({"rating": score, "count": count})
         return buckets
+
+    def _build_exact_rating_distribution(self, ratings):
+        scores = [5.0, 4.5, 4.0, 3.5, 3.0, 2.5, 2.0, 1.5, 1.0, 0.5]
+        counts = dict((score, 0) for score in scores)
+        for row in ratings:
+            score = round(float(row["rating"]) * 2) / 2
+            if score in counts:
+                counts[score] += 1
+        return [{"rating": score, "label": "%.1f" % score, "count": counts[score]} for score in scores]
 
     def _build_user_tag_summary(self, movie_id):
         aggregates = {}
@@ -704,9 +883,9 @@ class CatalogService(object):
         tags.sort(key=lambda item: (-item["count"], item["tag"].lower()))
         return tags[:40]
 
-    def _build_movie_rating_records(self, movie, movie_ratings, limit=24, base_index=0):
+    def _build_movie_rating_records(self, movie, movie_ratings, limit=24, base_index=0, presorted=False):
         records = []
-        sorted_ratings = sorted(movie_ratings, key=lambda item: (-item["rating"], item["user_id"]))
+        sorted_ratings = list(movie_ratings) if presorted else sorted(movie_ratings, key=lambda item: (-self._timestamp_value(item.get("rated_at")), item["user_id"]))
         for index, row in enumerate(sorted_ratings[:limit]):
             user = self.user_map.get(row["user_id"], {})
             records.append(
@@ -721,6 +900,25 @@ class CatalogService(object):
                 }
             )
         return records
+
+    def _build_comment_samples(self, movie, movie_ratings):
+        bands = {
+            "high": lambda rating: rating >= 4,
+            "medium": lambda rating: 2.5 <= rating < 4,
+            "low": lambda rating: rating < 2.5,
+        }
+        samples = {}
+        for key, predicate in bands.items():
+            rows = [row for row in movie_ratings if predicate(float(row["rating"]))]
+            rows.sort(
+                key=lambda row: (
+                    0 if (row.get("comment") or "").strip() else 1,
+                    -self._timestamp_value(row.get("rated_at")),
+                    row["user_id"],
+                )
+            )
+            samples[key] = self._build_movie_rating_records(movie, rows, limit=2, presorted=True)
+        return samples
 
     def _summarize_user_tags(self, user_id, window):
         tag_rows = self._filter_tags_by_window(list(self.tags_by_user.get(user_id, [])), window)
@@ -782,7 +980,7 @@ class CatalogService(object):
                 {
                     "user_id": other_user_id,
                     "username": profile.get("username", "user-%s" % other_user_id),
-                    "occupation": profile.get("occupation"),
+                    "occupation": self._occupation_for_user(other_user_id, profile.get("occupation")),
                     "similarity": dot / (target_norm * other_norm),
                     "rating_count": len(ratings),
                 }
