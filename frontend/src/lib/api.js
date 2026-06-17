@@ -56,8 +56,18 @@ export function searchMovies(query, limit = 20) {
   return request(`/movies/search?q=${encodeURIComponent(query)}&limit=${limit}`);
 }
 
-export function fetchRecommendations(userId, algorithm, limit = 6) {
-  return request(`/recommendations/${userId}?algorithm=${algorithm}&limit=${limit}`);
+export function fetchRecommendations(userId, algorithm, limit = 6, options = {}) {
+  const params = new URLSearchParams({
+    algorithm,
+    limit: String(limit),
+  });
+  if (options.genreWeight !== undefined) {
+    params.set('genre_weight', String(options.genreWeight));
+  }
+  if (options.tagWeight !== undefined) {
+    params.set('tag_weight', String(options.tagWeight));
+  }
+  return request(`/recommendations/${userId}?${params.toString()}`);
 }
 
 export function fetchHistory(userId) {

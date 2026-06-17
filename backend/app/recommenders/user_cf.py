@@ -1,4 +1,4 @@
-from .base import BaseRecommender
+from .base import BaseRecommender, format_score, genre_text
 
 
 class UserCFRecommender(BaseRecommender):
@@ -39,6 +39,7 @@ class UserCFRecommender(BaseRecommender):
         target_ratings = self.user_ratings.get(user_id, {})
         scores = {}
         supports = {}
+        contributors = {}
 
         for other_user in self.user_ratings:
             if other_user == user_id:
@@ -51,6 +52,7 @@ class UserCFRecommender(BaseRecommender):
                     continue
                 scores[movie_id] = scores.get(movie_id, 0.0) + similarity * rating
                 supports[movie_id] = supports.get(movie_id, 0.0) + similarity
+                contributors.setdefault(movie_id, []).append((similarity, other_user, rating))
 
         ranked = []
         for movie_id, score in scores.items():
@@ -63,8 +65,21 @@ class UserCFRecommender(BaseRecommender):
         results = []
         for score, support, movie_id in ranked[:limit]:
             movie = dict(self.movie_map[movie_id])
+            top_contributors = sorted(contributors.get(movie_id, []), key=lambda item: (-item[0], -item[2]))[:3]
+            avg_neighbor_rating = 0.0
+            if top_contributors:
+                avg_neighbor_rating = sum(item[2] for item in top_contributors) / len(top_contributors)
             movie["score"] = round(score, 4)
-            movie["reason"] = "与你相似的用户对这部电影评分较高"
+            movie["neighbor_count"] = len(contributors.get(movie_id, []))
+            movie["reason"] = (
+                "协同过滤先找与你评分口味相近的用户；这些相似用户给这部%s片的加权预测分为 %s。"
+                % (genre_text(movie), format_score(score))
+            )
+            movie["reason_details"] = [
+                "相似用户加权分 %s" % format_score(score),
+                "%s 个邻居贡献" % len(contributors.get(movie_id, [])),
+                "邻居均分约 %s" % format_score(avg_neighbor_rating),
+            ]
             movie["support"] = round(support, 4)
             results.append(movie)
         return results

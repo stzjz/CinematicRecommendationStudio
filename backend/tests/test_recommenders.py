@@ -1,5 +1,8 @@
+import os
+import tempfile
 import unittest
 
+from app.metadata_catalog import save_metadata_catalog
 from app.sample_data import MOVIES, RATINGS
 from app.sample_data import ABLATION_RESULTS, MODEL_METRICS, USERS
 from app.services.catalog_service import CatalogService
@@ -12,7 +15,7 @@ class RecommendationServiceTest(unittest.TestCase):
 
     def test_supported_algorithms(self):
         names = [item["name"] for item in self.service.list_algorithms()]
-        self.assertEqual(sorted(names), ["content_based", "lightgcn", "popularity", "user_cf"])
+        self.assertEqual(sorted(names), ["content_based", "lightgcn", "ncf", "popularity", "user_cf"])
 
     def test_popularity_recommendation(self):
         result = self.service.recommend(user_id=1, algorithm="popularity", limit=3)
@@ -35,6 +38,49 @@ class RecommendationServiceTest(unittest.TestCase):
         self.assertTrue(result["items"])
         for item in result["items"]:
             self.assertIn("reason", item)
+            self.assertIn("reason_details", item)
+            self.assertTrue(item["reason_details"])
+
+    def test_content_based_recommendation_uses_weights_and_tags(self):
+        movie_tags = [
+            {"user_id": 1, "movie_id": 4, "tag": "romance", "tagged_at": "1"},
+            {"user_id": 2, "movie_id": 4, "tag": "music", "tagged_at": "2"},
+            {"user_id": 1, "movie_id": 15, "tag": "romance", "tagged_at": "3"},
+            {"user_id": 2, "movie_id": 15, "tag": "period drama", "tagged_at": "4"},
+            {"user_id": 1, "movie_id": 21, "tag": "period drama", "tagged_at": "5"},
+            {"user_id": 2, "movie_id": 24, "tag": "romance", "tagged_at": "6"},
+            {"user_id": 3, "movie_id": 1, "tag": "romance", "tagged_at": "7"},
+        ]
+        service = RecommendationService(MOVIES, RATINGS, movie_tags)
+        result = service.recommend(
+            user_id=3,
+            algorithm="content_based",
+            limit=5,
+            genre_weight=0.4,
+            tag_weight=0.6,
+        )
+
+        self.assertEqual(result["algorithm"], "content_based")
+        self.assertAlmostEqual(result["meta"]["genre_weight"], 0.4)
+        self.assertAlmostEqual(result["meta"]["tag_weight"], 0.6)
+        self.assertTrue(result["items"])
+        self.assertTrue(any(item.get("matched_tags") for item in result["items"]))
+        for item in result["items"]:
+            self.assertIn("reason", item)
+            self.assertIn("reason_details", item)
+
+    def test_content_based_weight_normalization_fallback(self):
+        result = self.service.recommend(
+            user_id=999,
+            algorithm="content_based",
+            limit=5,
+            genre_weight=0,
+            tag_weight=0,
+        )
+
+        self.assertEqual(result["items"], [])
+        self.assertAlmostEqual(result["meta"]["genre_weight"], 0.4)
+        self.assertAlmostEqual(result["meta"]["tag_weight"], 0.6)
 
     def test_unsupported_algorithm(self):
         with self.assertRaises(ValueError):
@@ -109,6 +155,32 @@ class CatalogServiceTest(unittest.TestCase):
         titles = [movie["title"] for movie in results]
 
         self.assertIn("The Dark Knight", titles)
+
+    def test_generated_metadata_cache_overrides_builtin_summary_and_poster(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = os.path.join(temp_dir, "movie_metadata_cache.json")
+            old_path = os.environ.get("RECSYS_METADATA_PATH")
+            os.environ["RECSYS_METADATA_PATH"] = cache_path
+            try:
+                save_metadata_catalog(
+                    {
+                        "the shawshank redemption|1994": {
+                            "poster_url": "https://example.com/shawshank.jpg",
+                            "summary": "A cached summary from the enrichment file.",
+                            "source": "test",
+                        }
+                    }
+                )
+                service = CatalogService(USERS, MOVIES, RATINGS, [], MODEL_METRICS, ABLATION_RESULTS)
+                movie = service.get_movie(1)
+
+                self.assertEqual(movie["poster_url"], "https://example.com/shawshank.jpg")
+                self.assertEqual(movie["summary"], "A cached summary from the enrichment file.")
+            finally:
+                if old_path is None:
+                    os.environ.pop("RECSYS_METADATA_PATH", None)
+                else:
+                    os.environ["RECSYS_METADATA_PATH"] = old_path
 
     def test_rating_crud_updates_user_history(self):
         service = CatalogService(

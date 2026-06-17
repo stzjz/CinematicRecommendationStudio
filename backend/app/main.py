@@ -434,6 +434,35 @@ def render_homepage():
       return (genres || []).join(" / ");
     }
 
+    function displayMovieTitle(title) {
+      const rawTitle = String(title || "").trim();
+      const match = rawTitle.match(/,\s*(the|a|an)$/i);
+      if (!match) {
+        return rawTitle;
+      }
+      const article = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+      return article + " " + rawTitle.replace(/,\s*(the|a|an)$/i, "").trim();
+    }
+
+    function displayAlgorithmName(name) {
+      return name === "lightgcn" ? "litegcn" : name;
+    }
+
+    function displayAlgorithmDescription(description) {
+      return String(description || "")
+        .replace(/LightGCN/g, "litegcn")
+        .replace(/lightgcn/g, "litegcn");
+    }
+
+    function sortAlgorithmsForDisplay(items) {
+      const priority = { lightgcn: 0, ncf: 1, content_based: 2 };
+      return [...(items || [])].sort(function(a, b) {
+        const aRank = priority[a.name] ?? 2;
+        const bRank = priority[b.name] ?? 2;
+        return aRank - bRank;
+      });
+    }
+
     function renderMovieCards(containerId, items, emptyText) {
       const container = document.getElementById(containerId);
       if (!items.length) {
@@ -444,7 +473,7 @@ def render_homepage():
         return `
           <article class="movie-card">
             <div class="movie-badge">${item.year || "Movie"}</div>
-            <h3>${item.title}</h3>
+            <h3>${displayMovieTitle(item.title)}</h3>
             <div class="movie-meta">${genresText(item.genres)}</div>
             <div class="movie-reason">${item.reason || item.summary || "暂无额外说明"}</div>
             ${item.score !== undefined ? `<div class="score">Score ${Number(item.score).toFixed(2)}</div>` : ""}
@@ -481,13 +510,13 @@ def render_homepage():
       ]);
 
       state.users = users.items || [];
-      state.algorithms = algorithms.items || [];
+      state.algorithms = sortAlgorithmsForDisplay(algorithms.items || []);
 
       fillSelect("user-select", state.users, function(item) { return item.user_id; }, function(item) {
         return item.user_id + " - " + item.username;
       });
       fillSelect("algorithm-select", state.algorithms, function(item) { return item.name; }, function(item) {
-        return item.name + " - " + item.description;
+        return displayAlgorithmName(item.name) + " - " + displayAlgorithmDescription(item.description);
       });
 
       document.getElementById("data-source").textContent = (health.data_source || "-").toUpperCase();
@@ -514,13 +543,13 @@ def render_homepage():
       ]);
 
       document.getElementById("recommendation-desc").textContent =
-        (recommendations.meta && recommendations.meta.description) || "推荐结果";
+        displayAlgorithmDescription(recommendations.meta && recommendations.meta.description) || "推荐结果";
 
       renderMovieCards("recommendations", recommendations.items || [], "该用户当前没有可展示的推荐结果");
       renderMiniList("history", history.items || [], function(item) {
         return `
           <article class="mini-item">
-            <h4>${item.title}</h4>
+            <h4>${displayMovieTitle(item.title)}</h4>
             <p>${genresText(item.genres)}</p>
             <div class="score">Rated ${Number(item.rating).toFixed(1)}</div>
           </article>
@@ -679,9 +708,19 @@ def build_app():
         user_id: int,
         algorithm: str = Query("popularity"),
         limit: int = Query(10, ge=1, le=50),
+        genre_weight: float | None = Query(None, ge=0),
+        tag_weight: float | None = Query(None, ge=0),
     ):
         try:
-            return recommendation_service.recommend(user_id=user_id, algorithm=algorithm, limit=limit)
+            for rating in catalog_service.get_user_ratings_for_recommendation(user_id):
+                recommendation_service.record_rating(user_id, rating["movie_id"], rating["rating"])
+            return recommendation_service.recommend(
+                user_id=user_id,
+                algorithm=algorithm,
+                limit=limit,
+                genre_weight=genre_weight,
+                tag_weight=tag_weight,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

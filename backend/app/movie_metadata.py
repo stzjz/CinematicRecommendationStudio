@@ -1,3 +1,6 @@
+from app.metadata_catalog import metadata_value_for_movie
+
+
 def _key(title, year):
     return "%s|%s" % ((title or "").strip().lower(), year or "")
 
@@ -142,6 +145,9 @@ DEMO_OCCUPATIONS = [
 
 
 def summary_for_movie(title, year, fallback_summary=""):
+    enriched_summary = metadata_value_for_movie(title, year, "summary", "")
+    if enriched_summary:
+        return enriched_summary
     return MOVIE_SUMMARIES.get(_key(title, year), fallback_summary or "")
 
 

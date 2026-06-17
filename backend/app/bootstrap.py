@@ -21,6 +21,7 @@ def build_services():
     recommendation_service = RecommendationService(
         dataset["movies"],
         dataset["ratings"],
+        dataset.get("movie_tags", []),
         data_source=dataset["data_source"],
     )
 

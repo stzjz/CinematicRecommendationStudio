@@ -1,42 +1,82 @@
 import math
 import os
+import json
+import re
 import warnings
 
-from .base import BaseRecommender
+from .base import BaseRecommender, format_score, genre_text
 
 
 class LightGCNRecommender(BaseRecommender):
     name = "lightgcn"
-    description = "LightGCN checkpoint on MovieLens-1M graph, with graph-neighborhood fallback when torch is unavailable"
+    description = "LightGCN checkpoint on local MovieLens graph, with graph-neighborhood fallback when torch is unavailable"
 
     def __init__(self, movies, ratings, project_root=None):
         self.movies = movies
         self.ratings = ratings
         self.movie_map = dict((movie["movie_id"], movie) for movie in movies)
         self.project_root = project_root or self._default_project_root()
-        self.lightgcn_root = os.path.join(os.path.dirname(self.project_root), "BigDataHomework", "LightGCN")
-        self.dataset_path = os.path.join(self.lightgcn_root, "data", "ml-1m")
-        self.checkpoint_path = os.path.join(self.lightgcn_root, "code", "checkpoints", "lgn-ml-1m-4-64.pth.tar")
+        self.lightgcn_root, self.checkpoint_path, self.dataset_name, self.layer_count, self.rec_dim = self._resolve_lightgcn_assets()
+        self.dataset_path = os.path.join(self.lightgcn_root, "data", self.dataset_name) if self.lightgcn_root else ""
+        self.seed = 2026
         self.user_train_items = {}
         self.item_users = {}
         self.user_seen = {}
         self.item_to_movie_id = {}
         self.movie_id_to_item = {}
-        self.torch_status = "not_checked"
+        self.item_count_limit = self._resolve_item_count_limit()
+        self.torch_status = "not_loaded"
         self.torch_error = ""
         self._torch_scores = None
         self._build_indexes()
-        self._try_load_checkpoint_scores()
 
     def _default_project_root(self):
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+    def _resolve_lightgcn_assets(self):
+        configured_checkpoint = os.getenv("RECSYS_LIGHTGCN_CHECKPOINT", "").strip()
+        candidate_checkpoints = [
+            configured_checkpoint,
+            os.path.join(os.path.dirname(self.project_root), "BigDataHomework", "lizhixiang", "lightgcn_pytorch", "code", "checkpoints", "lgn-ml-20m-4-64.pth.tar"),
+            os.path.join(os.path.dirname(self.project_root), "BigDataHomework", "lizhixiang", "lightgcn_pytorch", "code", "checkpoints", "lgn-ml-1m-4-64.pth.tar"),
+            os.path.join(os.path.dirname(self.project_root), "BigDataHomework", "LightGCN", "code", "checkpoints", "lgn-ml-1m-4-64.pth.tar"),
+            os.path.join(os.path.dirname(self.project_root), "BigDataHomework", "lizhixiang", "LightGCN_old", "code", "checkpoints", "lgn-ml-1m-4-64.pth.tar"),
+        ]
+        checkpoint_path = ""
+        for path in candidate_checkpoints:
+            if path and os.path.exists(path):
+                checkpoint_path = path
+                break
+        if not checkpoint_path:
+            checkpoint_path = candidate_checkpoints[1]
+
+        lightgcn_root = os.path.abspath(os.path.join(os.path.dirname(checkpoint_path), "..", "..")) if checkpoint_path else ""
+        checkpoint_name = os.path.basename(checkpoint_path)
+        match = re.match(r"lgn-(.+)-(\d+)-(\d+)\.pth\.tar$", checkpoint_name)
+        dataset_name = match.group(1) if match else "ml-1m"
+        layer_count = int(match.group(2)) if match else 4
+        rec_dim = int(match.group(3)) if match else 64
+        return lightgcn_root, checkpoint_path, dataset_name, layer_count, rec_dim
+
+    def _resolve_item_count_limit(self):
+        stats_path = os.path.join(self.dataset_path, "stats.json")
+        if os.path.exists(stats_path):
+            try:
+                with open(stats_path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                return int(payload.get("n_items") or 0)
+            except Exception:
+                pass
+        if self.dataset_name == "ml-1m":
+            return 3706
+        return len(self.movies)
 
     def _build_indexes(self):
         for rating in self.ratings:
             self.user_seen.setdefault(int(rating["user_id"]), set()).add(int(rating["movie_id"]))
 
         ordered_movies = sorted(self.movies, key=lambda movie: movie["movie_id"])
-        for item_index, movie in enumerate(ordered_movies[:3706]):
+        for item_index, movie in enumerate(ordered_movies[: self.item_count_limit]):
             self.item_to_movie_id[item_index] = movie["movie_id"]
             self.movie_id_to_item[movie["movie_id"]] = item_index
 
@@ -92,7 +132,7 @@ class LightGCNRecommender(BaseRecommender):
                 all_emb = torch.cat([user_ego, item_ego], dim=0)
                 layers = [all_emb]
                 with torch.no_grad():
-                    for _ in range(4):
+                    for _ in range(self.layer_count):
                         all_emb = torch.sparse.mm(graph, all_emb)
                         layers.append(all_emb)
                     light_out = torch.stack(layers, dim=1).mean(dim=1)
@@ -122,6 +162,8 @@ class LightGCNRecommender(BaseRecommender):
             import torch
         except Exception:
             return []
+        if self.torch_status == "not_loaded":
+            self._try_load_checkpoint_scores()
         if self.torch_status != "checkpoint":
             return []
         lgn_user = self._lightgcn_user_id(user_id)
@@ -185,7 +227,17 @@ class LightGCNRecommender(BaseRecommender):
             movie["lightgcn_user_index"] = lgn_user
             movie["lightgcn_rank"] = rank
             movie["lightgcn_source"] = source
-            movie["reason"] = "LightGCN 在用户-电影交互图上传播偏好后给出的高分候选"
+            source_label = "checkpoint 嵌入" if source == "checkpoint" else "图邻域兜底"
+            movie["reason"] = (
+                "LightGCN 把用户和电影放在交互图上做 %s 层传播；该%s片在用户向量附近，图得分 %s。"
+                % (self.layer_count, genre_text(movie), format_score(score, 3))
+            )
+            movie["reason_details"] = [
+                "来源：%s" % source_label,
+                "图得分 %s" % format_score(score, 3),
+                "图邻居支撑 %s" % movie["support"],
+                "item %s" % item_index,
+            ]
             results.append(movie)
         return results
 
@@ -194,6 +246,14 @@ class LightGCNRecommender(BaseRecommender):
         if items:
             return items
         return self._fallback_recommend(user_id, limit)
+
+    def metadata(self):
+        return {
+            "dataset": self.dataset_name,
+            "layer": self.layer_count,
+            "recdim": self.rec_dim,
+            "seed": self.seed,
+        }
 
     def record_rating(self, user_id, movie_id, rating):
         self.user_seen.setdefault(int(user_id), set()).add(int(movie_id))

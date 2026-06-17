@@ -1,3 +1,6 @@
+from app.metadata_catalog import metadata_value_for_movie
+
+
 def _key(title, year):
     return "%s|%s" % ((title or "").strip().lower(), year or "")
 
@@ -133,4 +136,7 @@ REAL_POSTER_URLS = {
 
 
 def poster_url_for_movie(title, year, fallback_url):
+    enriched_poster = metadata_value_for_movie(title, year, "poster_url", "")
+    if enriched_poster:
+        return enriched_poster
     return REAL_POSTER_URLS.get(_key(title, year), fallback_url)

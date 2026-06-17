@@ -195,6 +195,22 @@ class CatalogService(object):
                 return dict(row)
         return None
 
+    def get_user_ratings_for_recommendation(self, user_id):
+        if self.db_path:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT user_id, movie_id, rating, rated_at, comment
+                    FROM ratings
+                    WHERE user_id = ?
+                    ORDER BY rating_id
+                    """,
+                    (user_id,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        return [dict(row) for row in self.ratings_by_user.get(user_id, [])]
+
     def save_user_rating(self, user_id, movie_id, rating, comment=None):
         if user_id not in self.user_map:
             raise ValueError("User not found")

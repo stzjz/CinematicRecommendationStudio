@@ -136,6 +136,61 @@ MovieLens-1M 导入后包含：
 - `3,883` 部电影
 - `1,000,209` 条评分
 
+### 批量补全真实海报和简介
+
+项目现在支持批量补全电影海报和简介，并把结果同时写入：
+
+- `backend/data/movie_metadata_cache.json`
+- `movies` 表中的 `poster_url` / `summary`
+
+推荐方式：
+
+- 优先使用 `MovieLens ml-25m` 中 `links.csv` 的 `tmdbId/imdbId` 做精确匹配
+- 如配置了 `TMDb` 凭证，会优先通过 `TMDb API` 获取海报和简介，覆盖率最高
+- 若未配置 `TMDb` 凭证，则回退到 `Wikipedia` 的搜索、摘要和页面图片
+
+执行方式：
+
+```bash
+.venv/bin/python backend/scripts/enrich_movie_metadata.py
+```
+
+常用参数：
+
+```bash
+.venv/bin/python backend/scripts/enrich_movie_metadata.py --limit 100
+.venv/bin/python backend/scripts/enrich_movie_metadata.py --force
+.venv/bin/python backend/scripts/enrich_movie_metadata.py --timeout 20 --retries 2 --progress-every 10
+.venv/bin/python backend/scripts/enrich_movie_metadata.py --limit 20 --force --progress-every 1
+.venv/bin/python backend/scripts/enrich_movie_metadata.py --movie-ids 26150,3746,1935 --source tmdb_web --progress-every 1
+```
+
+如需显著提高覆盖率，先配置 `TMDb`：
+
+```bash
+export TMDB_API_KEY=你的_key
+.venv/bin/python backend/scripts/enrich_movie_metadata.py
+```
+
+或使用 Bearer Token：
+
+```bash
+export TMDB_BEARER_TOKEN=你的_token
+.venv/bin/python backend/scripts/enrich_movie_metadata.py
+```
+
+说明：
+- 脚本默认优先补全缺失或仍使用占位海报的电影。
+- 配置了 `TMDb` 凭证时，默认只走 `TMDb` 精确补全；如需同时启用 `Wikipedia` 兜底，可加 `--source tmdb+wiki`，但整体会慢很多。
+- 如果当前服务器访问 `api.themoviedb.org` 证书异常或超时，可以使用 `--source tmdb_web` 从 TMDb 网页补全推荐候选电影，不需要 API key。
+- 运行时会打印 `fetching` / `processed` 进度；如果 `failed` 持续增长，通常是当前服务器到 `api.themoviedb.org` 的网络连接超时或被阻断。
+- 遇到 `api.themoviedb.org` 证书不匹配时，脚本会自动用 IPv4 重试一次；如需强制 IPv4 可加 `--ipv4`，如需关闭可加 `--no-ipv4`。
+- 海报和简介会被缓存到本地，后续页面展示不再依赖外网实时查询。
+- 推荐先用 `--limit 20 --force --progress-every 1` 测试网络可用后，再跑完整补全。
+- 如需自定义缓存文件路径，可设置 `RECSYS_METADATA_PATH`。
+- 如需显式指定带 `links.csv` 的数据集压缩包，可使用 `--links-archive backend/data/raw/ml-25m.zip`。
+- 只使用 `Wikipedia` 回退时，覆盖率会明显低于 `TMDb` 精确补全；极少数重名电影仍可能需要后续人工校正。
+
 ### 使用演示样例
 
 如需快速恢复为内置演示数据，可以运行：

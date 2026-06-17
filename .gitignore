@@ -1,7 +1,10 @@
 .conda/
 .venv/
 .tools/
+.env
+.env.*
 backend/data/*.db
+backend/data/movie_metadata_cache.json
 backend/data/raw/
 backend/app/__pycache__/
 backend/app/recommenders/__pycache__/

@@ -1,4 +1,4 @@
-from .base import BaseRecommender
+from .base import BaseRecommender, format_score, genre_text
 
 
 class PopularityRecommender(BaseRecommender):
@@ -34,7 +34,15 @@ class PopularityRecommender(BaseRecommender):
         for score, count, movie_id in candidates[:limit]:
             movie = dict(self.movie_map[movie_id])
             movie["score"] = round(score, 4)
-            movie["reason"] = "这部电影在全站用户中整体评分较高"
+            movie["reason"] = (
+                "热门基线按全站平均分优先、评分人数辅助排序；这部%s片均分 %s，来自 %s 条评分。"
+                % (genre_text(movie), format_score(score), count)
+            )
+            movie["reason_details"] = [
+                "全站均分 %s" % format_score(score),
+                "%s 条评分支撑" % count,
+                "类型：%s" % genre_text(movie),
+            ]
             movie["support"] = count
             results.append(movie)
         return results

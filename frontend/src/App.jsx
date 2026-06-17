@@ -20,6 +20,7 @@ import {
 import MoviePosterCard from './components/MoviePosterCard';
 import SectionTitle from './components/SectionTitle';
 import StatCard from './components/StatCard';
+import { displayMovieTitle } from './lib/movieTitle';
 
 const LIMIT_OPTIONS = [4, 6, 8];
 const TOTAL_BOARD_KEY = '__total__';
@@ -31,6 +32,25 @@ const PREFERENCE_WINDOWS = [
   { key: 'month', label: '近30天' },
 ];
 const CHART_COLORS = ['#ffc455', '#62d8ff', '#8ff2bf', '#ff7c73', '#b49cff', '#f2d17d'];
+
+function displayAlgorithmName(name) {
+  return name === 'lightgcn' ? 'litegcn' : name;
+}
+
+function displayAlgorithmDescription(description) {
+  return (description || '')
+    .replace(/LightGCN/g, 'litegcn')
+    .replace(/lightgcn/g, 'litegcn');
+}
+
+function sortAlgorithmsForDisplay(items) {
+  const priority = { lightgcn: 0, ncf: 1, content_based: 2 };
+  return [...(items || [])].sort((a, b) => {
+    const aRank = priority[a.name] ?? 2;
+    const bRank = priority[b.name] ?? 2;
+    return aRank - bRank;
+  });
+}
 
 function getRouteMovieId(pathname) {
   const match = pathname.match(/^\/movies\/(\d+)/);
@@ -64,6 +84,7 @@ export default function App() {
   const [selectedUser, setSelectedUser] = useState('');
   const [selectedAlgorithm, setSelectedAlgorithm] = useState('');
   const [selectedLimit, setSelectedLimit] = useState(6);
+  const [hybridWeights, setHybridWeights] = useState({ genre: 0.4, tag: 0.6 });
   const [userDataVersion, setUserDataVersion] = useState(0);
   const [newUserForm, setNewUserForm] = useState({ username: '', age: '', gender: 'U', occupation: '' });
   const [creatingUser, setCreatingUser] = useState(false);
@@ -105,7 +126,7 @@ export default function App() {
         }
 
         const nextUsers = usersRes.items || [];
-        const nextAlgorithms = algoRes.items || [];
+        const nextAlgorithms = sortAlgorithmsForDisplay(algoRes.items || []);
 
         setHealth(healthRes);
         setUsers(nextUsers);
@@ -144,8 +165,11 @@ export default function App() {
       }
 
       try {
+        const recommendationOptions = selectedAlgorithm === 'content_based'
+          ? { genreWeight: hybridWeights.genre, tagWeight: hybridWeights.tag }
+          : {};
         const [recommendationRes, historyRes, preferenceRes] = await Promise.all([
-          fetchRecommendations(selectedUser, selectedAlgorithm, selectedLimit),
+          fetchRecommendations(selectedUser, selectedAlgorithm, selectedLimit, recommendationOptions),
           fetchHistory(selectedUser),
           fetchPreferenceProfile(selectedUser, selectedPreferenceWindow),
         ]);
@@ -169,7 +193,7 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [selectedUser, selectedAlgorithm, selectedLimit, selectedPreferenceWindow, userDataVersion]);
+  }, [selectedUser, selectedAlgorithm, selectedLimit, selectedPreferenceWindow, hybridWeights, userDataVersion]);
 
   const selectedUserProfile = useMemo(
     () => users.find((user) => String(user.user_id) === String(selectedUser)),
@@ -290,6 +314,8 @@ export default function App() {
         setSelectedAlgorithm={setSelectedAlgorithm}
         selectedLimit={selectedLimit}
         setSelectedLimit={setSelectedLimit}
+        hybridWeights={hybridWeights}
+        setHybridWeights={setHybridWeights}
         selectedAlgorithmMeta={selectedAlgorithmMeta}
         selectedUserProfile={selectedUserProfile}
         health={health}
@@ -317,22 +343,6 @@ export default function App() {
           <p className="hero-text">
             这个前端项目直接消费你们已经搭好的后端 API，用更完整的视觉语言把个性化推荐、热门影片、历史偏好和电影详情串成一条答辩叙事线。
           </p>
-          <div className="hero-actions">
-            <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">
-              查看 API 文档
-            </a>
-            <button
-              type="button"
-              className="link-pill"
-              onClick={() => {
-                window.history.pushState({}, '', '/admin');
-                setRoutePath(window.location.pathname);
-              }}
-            >
-              推荐后台
-            </button>
-            <span>数据源：{health?.data_source?.toUpperCase() || '-'}</span>
-          </div>
         </div>
         <div className="hero-stage">
           <div className="spotlight-card primary current-user-card">
@@ -358,20 +368,20 @@ export default function App() {
             <div className="current-user-head">
               <div>
                 <span>Current Algorithm</span>
-                <strong>{selectedAlgorithmMeta?.name || 'Loading'}</strong>
+                <strong>{displayAlgorithmName(selectedAlgorithmMeta?.name) || 'Loading'}</strong>
               </div>
               <label className="mini-user-switch">
                 <span>切换</span>
                 <select value={selectedAlgorithm} onChange={(event) => setSelectedAlgorithm(event.target.value)}>
                   {algorithms.map((algorithm) => (
                     <option key={algorithm.name} value={algorithm.name}>
-                      {algorithm.name}
+                      {displayAlgorithmName(algorithm.name)}
                     </option>
                   ))}
                 </select>
               </label>
             </div>
-            <p>{selectedAlgorithmMeta?.description || '等待算法信息'}</p>
+            <p>{displayAlgorithmDescription(selectedAlgorithmMeta?.description) || '等待算法信息'}</p>
           </div>
         </div>
       </header>
@@ -396,7 +406,7 @@ export default function App() {
             <button type="button" key={movie.movie_id} onClick={() => handleMovieSelect(movie)}>
               <img src={movie.poster_url} alt="" />
               <span>
-                <strong>{movie.title}</strong>
+                <strong>{displayMovieTitle(movie.title)}</strong>
                 <em>{movie.year || '-'} · {(movie.genres || []).join(' / ')}</em>
               </span>
             </button>
@@ -418,7 +428,7 @@ export default function App() {
           <SectionTitle
             eyebrow="Top Picks"
             title="个性化推荐结果"
-            description={selectedAlgorithmMeta?.description || '当前选中算法的推荐结果会展示在这里。'}
+            description={displayAlgorithmDescription(selectedAlgorithmMeta?.description) || '当前选中算法的推荐结果会展示在这里。'}
           />
           <div className="poster-grid">
             {recommendations.map((movie, index) => (
@@ -484,7 +494,7 @@ export default function App() {
                     <strong>{index + 1}</strong>
                     <img src={movie.poster_url} alt="" />
                     <span>
-                      <b>{movie.title}</b>
+                      <b>{displayMovieTitle(movie.title)}</b>
                       <em>{(movie.genres || []).join(' / ')}</em>
                     </span>
                     <i>{movie.rating_count} 评 · {Number(movie.average_rating || 0).toFixed(1)}</i>
@@ -546,8 +556,8 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
   const maxRecommendedGenreCount = Math.max(...recommendedGenreData.map((item) => item.count), 1);
   const modeCopy = {
     content_based: {
-      label: '类型画像视图',
-      description: '当前算法主要依赖电影主类型，因此优先展示类型强度和标签语义。',
+      label: '类型 + 自由标签混合视图',
+      description: '当前算法把主类型画像和社区自由标签画像按权重融合，用更细的文本语义补充类型匹配。',
     },
     user_cf: {
       label: '相似用户视图',
@@ -559,7 +569,11 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
     },
     lightgcn: {
       label: '图传播视图',
-      description: 'LightGCN 只保留用户-电影二部图上的邻域聚合，用 4 层传播把历史交互扩散到候选电影。',
+      description: 'litegcn 只保留用户-电影二部图上的邻域聚合，用 4 层传播把历史交互扩散到候选电影。',
+    },
+    ncf: {
+      label: '神经匹配视图',
+      description: 'NCF NeuMF 同时计算 GMF 向量乘积和 MLP 非线性匹配，再融合成最终排序分数。',
     },
   };
   const activeMode = modeCopy[algorithm] || {
@@ -639,7 +653,9 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
 
       {algorithm === 'content_based' ? (
         <>
-        <p className="principle-caption">读取“类型占比”作为用户画像，再检查推荐电影是否命中这些类型。</p>
+        <p className="principle-caption">
+          {`读取“类型占比”和“看过电影的自由标签合集”共同作为用户画像；当前权重：主类型 ${Number(recommendationMeta?.genre_weight ?? 0.4).toFixed(2)}，自由标签 ${Number(recommendationMeta?.tag_weight ?? 0.6).toFixed(2)}。`}
+        </p>
         <div className="genre-match-matrix">
           {topGenres.slice(0, 6).map((genre) => {
             const hitCount = recommendedGenreCounts[genre.label] || 0;
@@ -654,6 +670,16 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
             );
           })}
           {!topGenres.length ? <div className="empty-card">暂无可用于内容匹配的类型画像。</div> : null}
+        </div>
+        <div className="tag-match-matrix">
+          {recommendedMovies.slice(0, 6).map((movie) => (
+            <article key={movie.movie_id}>
+              <strong>{displayMovieTitle(movie.title)}</strong>
+              <span>{movie.matched_tags?.length ? movie.matched_tags.slice(0, 4).join(' / ') : '暂无自由标签命中'}</span>
+              <em>类型 {Number(movie.genre_score || 0).toFixed(1)} · 标签 {Number(movie.tag_score || 0).toFixed(1)}</em>
+            </article>
+          ))}
+          {!recommendedMovies.length ? <div className="empty-card">暂无推荐结果用于标签命中展示。</div> : null}
         </div>
         </>
       ) : null}
@@ -674,7 +700,7 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
           <div className="cf-column movies">
             {recommendedMovies.slice(0, 4).map((movie) => (
               <div className="cf-node movie" key={movie.movie_id}>
-                <strong>{movie.title}</strong>
+                <strong>{displayMovieTitle(movie.title)}</strong>
                 <span>{(movie.genres || []).slice(0, 2).join(' / ')}</span>
               </div>
             ))}
@@ -692,7 +718,7 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
             const support = Number(movie.support || movie.rating_count || 0);
             return (
               <article key={movie.movie_id}>
-                <span>{movie.title}</span>
+                <span>{displayMovieTitle(movie.title)}</span>
                 <div className="popularity-track">
                   <i style={{ width: `${Math.max((support / maxRecommendationSupport) * 100, 6)}%` }} />
                 </div>
@@ -718,7 +744,15 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
         </>
       ) : null}
 
-      {!['content_based', 'user_cf', 'popularity', 'lightgcn'].includes(algorithm) ? (
+      {algorithm === 'ncf' ? (
+        <>
+        <p className="principle-caption">checkpoint 参数：dataset={recommendationMeta?.dataset || 'ml-1m'}，model={recommendationMeta?.model || 'NeuMF-end'}，factor={recommendationMeta?.factor_num || 32}，layers={recommendationMeta?.num_layers || 3}。当前状态：{recommendationMeta?.checkpoint_status || 'unknown'}。</p>
+        <NCFMatchVisualizer recommendations={recommendedMovies} meta={recommendationMeta} />
+        {recommendationMeta?.checkpoint_error ? <p className="principle-caption">{recommendationMeta.checkpoint_error}</p> : null}
+        </>
+      ) : null}
+
+      {!['content_based', 'user_cf', 'popularity', 'lightgcn', 'ncf'].includes(algorithm) ? (
         <div className="empty-card">当前算法暂未配置专属解释图。</div>
       ) : null}
     </section>
@@ -797,7 +831,7 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
         {topHistory.slice(0, 5).map((movie) => (
           <article key={`history-${movie.movie_id}`} className="stack-card">
             <div>
-              <h3>{movie.title}</h3>
+              <h3>{displayMovieTitle(movie.title)}</h3>
               <p>{(movie.genres || []).join(' / ')}{movie.rated_at ? ` · ${movie.rated_at}` : ''}</p>
             </div>
             <strong>{Number(movie.rating).toFixed(1)}</strong>
@@ -819,10 +853,11 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
   );
 
   const orderedSections = {
-    content_based: [chartOverviewSection, principleSection, genreSection, movieTagSection, authoredTagSection, historySection, similarUserSection, directorSection],
+    content_based: [chartOverviewSection, principleSection, movieTagSection, genreSection, authoredTagSection, historySection, similarUserSection, directorSection],
     user_cf: [chartOverviewSection, principleSection, similarUserSection, historySection, genreSection, movieTagSection, authoredTagSection, directorSection],
     popularity: [chartOverviewSection, principleSection, historySection, genreSection, movieTagSection, similarUserSection, authoredTagSection, directorSection],
     lightgcn: [chartOverviewSection, principleSection, historySection, similarUserSection, genreSection, movieTagSection, authoredTagSection, directorSection],
+    ncf: [chartOverviewSection, principleSection, historySection, genreSection, movieTagSection, authoredTagSection, similarUserSection, directorSection],
   }[algorithm] || [chartOverviewSection, principleSection, genreSection, movieTagSection, authoredTagSection, similarUserSection, historySection, directorSection];
 
   return (
@@ -867,6 +902,138 @@ function PreferenceProfilePanel({ profile, history, recommendations, recommendat
   );
 }
 
+function NCFMatchVisualizer({ recommendations, meta }) {
+  const topMovies = (recommendations || []).slice(0, 6);
+  const maxScore = Math.max(...topMovies.map((movie) => Math.abs(Number(movie.score || 0))), 1);
+  const maxGmf = Math.max(...topMovies.map((movie) => Math.abs(Number(movie.ncf_gmf_signal || 0))), 1);
+  const maxMlp = Math.max(...topMovies.map((movie) => Math.abs(Number(movie.ncf_mlp_signal || 0))), 1);
+  const topMovie = topMovies[0];
+  const fusionPoints = topMovies.slice(0, 5).map((movie, index) => {
+    const gmf = Number(movie.ncf_gmf_signal || 0);
+    const mlp = Number(movie.ncf_mlp_signal || 0);
+    return {
+      movie,
+      index,
+      x: 12 + Math.min((Math.abs(gmf) / maxGmf) * 74, 74),
+      y: 86 - Math.min((Math.abs(mlp) / maxMlp) * 74, 74),
+      size: 10 + Math.min((Math.abs(Number(movie.score || 0)) / maxScore) * 22, 22),
+    };
+  });
+  const pipelineSteps = [
+    { label: '用户向量', value: meta?.user_num ? `${meta.user_num} users` : 'user embedding' },
+    { label: '电影向量', value: meta?.item_num ? `${meta.item_num} items` : 'item embedding' },
+    { label: 'GMF', value: '逐维相乘' },
+    { label: 'MLP', value: `${meta?.num_layers || 3} 层非线性` },
+    { label: '融合排序', value: topMovie ? `Top1 ${topMovie.score?.toFixed ? topMovie.score.toFixed(2) : Number(topMovie.score || 0).toFixed(2)}` : 'score' },
+  ];
+
+  return (
+    <div className="ncf-visualizer">
+      <div className="ncf-fusion-map">
+        <section className="ncf-tower user-tower">
+          <span>用户塔</span>
+          <strong>user {topMovie?.ncf_user_index ?? '-'}</strong>
+          <div>
+            <i style={{ height: '64%' }} />
+            <i style={{ height: '42%' }} />
+            <i style={{ height: '76%' }} />
+            <i style={{ height: '52%' }} />
+          </div>
+        </section>
+        <section className="ncf-fusion-core">
+          <span>NeuMF 融合</span>
+          <strong>{topMovie ? Number(topMovie.score || 0).toFixed(3) : '-'}</strong>
+          <p>GMF 捕捉线性协同，MLP 捕捉非线性偏好，最终分数用于排序。</p>
+        </section>
+        <section className="ncf-tower item-tower">
+          <span>电影塔</span>
+          <strong>item {topMovie?.ncf_item_index ?? '-'}</strong>
+          <div>
+            <i style={{ height: '46%' }} />
+            <i style={{ height: '72%' }} />
+            <i style={{ height: '58%' }} />
+            <i style={{ height: '82%' }} />
+          </div>
+        </section>
+        <section className="ncf-signal-plane">
+          <div className="axis axis-x">GMF 交互强度</div>
+          <div className="axis axis-y">MLP 匹配强度</div>
+          {fusionPoints.map((point) => (
+            <span
+              key={point.movie.movie_id}
+              className="ncf-point"
+              style={{
+                left: `${point.x}%`,
+                top: `${point.y}%`,
+                width: `${point.size}px`,
+                height: `${point.size}px`,
+              }}
+              title={`${displayMovieTitle(point.movie.title)} · score ${Number(point.movie.score || 0).toFixed(3)}`}
+            >
+              {point.index + 1}
+            </span>
+          ))}
+        </section>
+      </div>
+
+      <div className="ncf-architecture">
+        {pipelineSteps.map((step, index) => (
+          <article key={step.label} className={`ncf-stage stage-${index}`}>
+            <span>{step.label}</span>
+            <strong>{step.value}</strong>
+            <i />
+          </article>
+        ))}
+      </div>
+
+      <div className="ncf-score-board">
+        <div className="ncf-score-head">
+          <strong>推荐候选的双路信号</strong>
+          <span>GMF 表示线性交互，MLP 表示非线性偏好匹配</span>
+        </div>
+        <div className="ncf-score-list">
+          {topMovies.map((movie, index) => {
+            const gmfWidth = Math.max((Math.abs(Number(movie.ncf_gmf_signal || 0)) / maxGmf) * 100, 4);
+            const mlpWidth = Math.max((Math.abs(Number(movie.ncf_mlp_signal || 0)) / maxMlp) * 100, 4);
+            const scoreWidth = Math.max((Math.abs(Number(movie.score || 0)) / maxScore) * 100, 5);
+            return (
+              <article key={movie.movie_id}>
+                <div className="ncf-movie-rank">
+                  <em>{index + 1}</em>
+                  <span>
+                    <strong>{displayMovieTitle(movie.title)}</strong>
+                    <b>item {movie.ncf_item_index ?? '-'} · user {movie.ncf_user_index ?? '-'}</b>
+                  </span>
+                </div>
+                <div className="ncf-signal-bars">
+                  <label>GMF<i><b style={{ width: `${gmfWidth}%` }} /></i></label>
+                  <label>MLP<i><b style={{ width: `${mlpWidth}%` }} /></i></label>
+                  <label>Score<i><b style={{ width: `${scoreWidth}%` }} /></i></label>
+                </div>
+                <small>
+                  GMF {Number(movie.ncf_gmf_signal || 0).toFixed(3)}
+                  {' · '}
+                  MLP {Number(movie.ncf_mlp_signal || 0).toFixed(3)}
+                  {' · '}
+                  Score {Number(movie.score || 0).toFixed(3)}
+                </small>
+                {movie.reason_details?.length ? (
+                  <div className="ncf-reason-pills">
+                    {movie.reason_details.slice(0, 3).map((detail) => (
+                      <i key={detail}>{detail}</i>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+          {!topMovies.length ? <div className="empty-card">暂无 NCF 推荐结果用于可视化。</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LightGCNKnowledgeGraph({ graph, recommendations }) {
   const historyNodes = (graph.nodes || []).filter((node) => node.type === 'history_movie').slice(0, 5);
   const neighborNodes = (graph.nodes || []).filter((node) => node.type === 'neighbor_user').slice(0, 4);
@@ -877,7 +1044,7 @@ function LightGCNKnowledgeGraph({ graph, recommendations }) {
   const recommendationNodes = (recommendations || []).slice(0, 6).map((movie, index) => ({
     id: `r-${movie.movie_id}`,
     type: 'recommended_movie',
-    label: movie.title,
+    label: displayMovieTitle(movie.title),
     subtitle: `Top ${index + 1} · item ${movie.lightgcn_item_index ?? '-'} · ${Number(movie.score || 0).toFixed(2)}`,
   }));
   const graphKey = [
@@ -919,6 +1086,13 @@ function LightGCNKnowledgeGraph({ graph, recommendations }) {
     { label: '候选', value: candidateNodes.length, type: 'candidate_movie' },
     { label: '推荐', value: recommendationNodes.length, type: 'recommended_movie' },
   ];
+  const layerBands = [
+    { label: 'User', detail: '当前用户', left: 2, width: 14 },
+    { label: 'L0', detail: '历史交互', left: 17, width: 20 },
+    { label: 'L1-L4', detail: '邻居传播', left: 38, width: 20 },
+    { label: 'Pool', detail: '候选池', left: 59, width: 21 },
+    { label: 'TopK', detail: '最终推荐', left: 81, width: 17 },
+  ];
   const edges = [
     ...historyNodes.map((node) => ({ source: 'target', target: node.id, type: 'history', strength: 0.88 })),
     ...neighborNodes.map((node, index) => ({ source: 'target', target: node.id, type: 'neighbor', bend: index % 2 ? 1 : -1, strength: 0.72 })),
@@ -931,9 +1105,18 @@ function LightGCNKnowledgeGraph({ graph, recommendations }) {
         .map((sourceNode) => ({ source: sourceNode.id, target: candidateNode.id, type: 'candidate', bend: index % 2 ? 1 : -1, strength: 0.5 }))
     ),
     ...recommendationNodes.flatMap((recNode, index) =>
+      candidateNodes.slice(0, 3).map((candidateNode, candidateIndex) => ({
+        source: candidateNode.id,
+        target: recNode.id,
+        type: 'rank',
+        bend: (index + candidateIndex) % 2 ? -1 : 1,
+        strength: 0.84,
+      }))
+    ),
+    ...recommendationNodes.flatMap((recNode, index) =>
       (neighborSources.length ? neighborSources.slice(0, 3) : [{ id: 'target' }])
         .filter((sourceNode) => sourceNode.id !== recNode.id)
-        .map((sourceNode) => ({ source: sourceNode.id, target: recNode.id, type: 'rank', bend: index % 2 ? -1 : 1, strength: 0.78 }))
+        .map((sourceNode) => ({ source: sourceNode.id, target: recNode.id, type: 'rank-soft', bend: index % 2 ? -1 : 1, strength: 0.62 }))
     ),
   ].filter((edge) => byId[edge.source] && byId[edge.target]);
   const activeNode = activeNodeId ? byId[activeNodeId] : null;
@@ -1020,6 +1203,14 @@ function LightGCNKnowledgeGraph({ graph, recommendations }) {
         setActiveNodeId('');
       }}
     >
+      <div className="kg-layer-bands" aria-hidden="true">
+        {layerBands.map((band) => (
+          <span key={band.label} style={{ left: `${band.left}%`, width: `${band.width}%` }}>
+            <strong>{band.label}</strong>
+            <em>{band.detail}</em>
+          </span>
+        ))}
+      </div>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <filter id="kg-line-glow" x="-20%" y="-20%" width="140%" height="140%">
@@ -1045,6 +1236,10 @@ function LightGCNKnowledgeGraph({ graph, recommendations }) {
           return <circle key={`pulse-${edge.target}-${index}`} className={`kg-edge-pulse edge-${edge.type}`} cx={target.x} cy={target.y} r="0.9" />;
         })}
       </svg>
+      <div className="kg-propagation-note">
+        <span>Embedding propagation</span>
+        <b>user to history to neighbors to candidates to TopK</b>
+      </div>
       <div className="kg-panel kg-stats">
         <strong>图谱结构</strong>
         <div className="kg-stat-grid">
@@ -1061,26 +1256,26 @@ function LightGCNKnowledgeGraph({ graph, recommendations }) {
           key={node.id}
           className={`kg-node ${node.type}`}
           style={{ left: `${node.x}%`, top: `${node.y}%` }}
-          title={`${node.label} ${node.subtitle || ''}`}
+          title={`${node.type?.includes('movie') ? displayMovieTitle(node.label) : node.label} ${node.subtitle || ''}`}
           data-related={activeNodeId ? connectedNodeIds.has(node.id) : true}
           onPointerEnter={() => setActiveNodeId(node.id)}
           onPointerDown={(event) => handlePointerDown(event, node)}
         >
-          <strong>{node.label}</strong>
+          <strong>{node.type?.includes('movie') ? displayMovieTitle(node.label) : node.label}</strong>
           <span>{node.subtitle}{node.occupation ? ` · ${node.occupation}` : ''}</span>
         </div>
       ))}
       <div className="kg-panel kg-focus-panel">
         <strong>{activeNode ? '当前选中节点' : '交互提示'}</strong>
-        <p>{activeNode ? activeNode.label : '拖动节点调整图谱，悬停节点会高亮它参与的传播路径。'}</p>
+        <p>{activeNode ? (activeNode.type?.includes('movie') ? displayMovieTitle(activeNode.label) : activeNode.label) : '拖动节点调整图谱，悬停节点会高亮它参与的传播路径。'}</p>
         {activeNode?.subtitle ? <span>{activeNode.subtitle}</span> : null}
         <button type="button" onClick={() => setPositions({})}>重置布局</button>
       </div>
       <div className="kg-panel kg-score-panel">
-        <strong>LightGCN Top 分数</strong>
+        <strong>litegcn Top 分数</strong>
         {(recommendations || []).slice(0, 5).map((movie, index) => (
           <div className="kg-score-row" key={movie.movie_id}>
-            <span>{index + 1}. {movie.title}</span>
+            <span>{index + 1}. {displayMovieTitle(movie.title)}</span>
             <b><i style={{ width: `${Math.max((Math.abs(Number(movie.score || 0)) / maxRecommendationScore) * 100, 6)}%` }} /></b>
             <em>{Number(movie.score || 0).toFixed(2)}</em>
           </div>
@@ -1106,6 +1301,8 @@ function AdminPage({
   setSelectedAlgorithm,
   selectedLimit,
   setSelectedLimit,
+  hybridWeights,
+  setHybridWeights,
   selectedAlgorithmMeta,
   selectedUserProfile,
   health,
@@ -1125,6 +1322,7 @@ function AdminPage({
   const [ratingMessage, setRatingMessage] = useState('');
   const [movieSearchMessage, setMovieSearchMessage] = useState('');
   const [savingRating, setSavingRating] = useState(false);
+  const showHybridWeights = selectedAlgorithm === 'content_based';
 
   useEffect(() => {
     let disposed = false;
@@ -1312,7 +1510,7 @@ function AdminPage({
             <select value={selectedAlgorithm} onChange={(event) => setSelectedAlgorithm(event.target.value)}>
               {algorithms.map((algorithm) => (
                 <option key={algorithm.name} value={algorithm.name}>
-                  {algorithm.name}
+                  {displayAlgorithmName(algorithm.name)}
                 </option>
               ))}
             </select>
@@ -1328,6 +1526,35 @@ function AdminPage({
             </select>
           </label>
         </div>
+        {showHybridWeights ? (
+          <div className="hybrid-weight-panel">
+            <label>
+              <span>主类型权重</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={hybridWeights.genre}
+                onChange={(event) => setHybridWeights((weights) => ({ ...weights, genre: Number(event.target.value) }))}
+              />
+              <strong>{Number(hybridWeights.genre).toFixed(2)}</strong>
+            </label>
+            <label>
+              <span>自由标签权重</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={hybridWeights.tag}
+                onChange={(event) => setHybridWeights((weights) => ({ ...weights, tag: Number(event.target.value) }))}
+              />
+              <strong>{Number(hybridWeights.tag).toFixed(2)}</strong>
+            </label>
+            <p>权重会在请求时自动归一化；两者都为 0 时回退到 0.40 / 0.60。</p>
+          </div>
+        ) : null}
         <div className="admin-config-summary">
           <div>
             <span>当前用户</span>
@@ -1336,8 +1563,8 @@ function AdminPage({
           </div>
           <div>
             <span>当前算法</span>
-            <strong>{selectedAlgorithmMeta?.name || '-'}</strong>
-            <p>{selectedAlgorithmMeta?.description || '等待选择算法'}</p>
+            <strong>{displayAlgorithmName(selectedAlgorithmMeta?.name) || '-'}</strong>
+            <p>{displayAlgorithmDescription(selectedAlgorithmMeta?.description) || '等待选择算法'}</p>
           </div>
           <div>
             <span>数据源</span>
@@ -1413,7 +1640,7 @@ function AdminPage({
               >
                 <img src={movie.poster_url} alt="" />
                 <span>
-                  <strong>{movie.title}</strong>
+                  <strong>{displayMovieTitle(movie.title)}</strong>
                   <em>{movie.year || '-'} · {(movie.genres || []).join(' / ')}</em>
                 </span>
               </button>
@@ -1432,16 +1659,16 @@ function AdminPage({
           <label>
             <span>用户</span>
             <select value={selectedUser} onChange={(event) => setSelectedUser(event.target.value)}>
-              {users.map((user) => (
-                <option key={user.user_id} value={user.user_id}>
-                  {user.user_id} - {user.username}
-                </option>
-              ))}
-            </select>
-          </label>
+                {users.map((user) => (
+                  <option key={user.user_id} value={user.user_id}>
+                    {user.user_id} - {user.username}
+                  </option>
+                ))}
+              </select>
+            </label>
           <label>
             <span>电影</span>
-            <input value={selectedMovieForEdit ? `${selectedMovieForEdit.movie_id} - ${selectedMovieForEdit.title}` : ''} readOnly placeholder="请先搜索并选择电影" />
+            <input value={selectedMovieForEdit ? `${selectedMovieForEdit.movie_id} - ${displayMovieTitle(selectedMovieForEdit.title)}` : ''} readOnly placeholder="请先搜索并选择电影" />
           </label>
           <label>
             <span>评分</span>
@@ -1652,11 +1879,11 @@ function MovieDetailPage({ movie, loading, error, users, selectedUser, onRatingC
         <section className="panel-block movie-detail-panel standalone">
           <div className="movie-detail-layout">
             <div className="movie-detail-poster">
-              <img src={movie.poster_url} alt={`${movie.title} poster`} />
+              <img src={movie.poster_url} alt={`${displayMovieTitle(movie.title)} poster`} />
             </div>
             <div className="movie-detail-main">
               <p className="section-eyebrow">Movie Detail</p>
-              <h1 className="movie-detail-title">{movie.title}</h1>
+              <h1 className="movie-detail-title">{displayMovieTitle(movie.title)}</h1>
               <p className="movie-detail-summary">{movie.summary || '暂无影片简介。'}</p>
 
               <div className="detail-stat-row">
@@ -1724,7 +1951,7 @@ function MovieDetailPage({ movie, loading, error, users, selectedUser, onRatingC
                   </div>
                   <label>
                     <span>当前电影</span>
-                    <input value={`${movie.movie_id} - ${movie.title}`} readOnly />
+                    <input value={`${movie.movie_id} - ${displayMovieTitle(movie.title)}`} readOnly />
                   </label>
                   <label>
                     <span>评分</span>
