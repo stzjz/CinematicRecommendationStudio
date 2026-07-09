@@ -17,11 +17,11 @@ CinematicRecommendationStudio/
 │   ├── sql/
 │   ├── tests/
 │   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   ├── public/
-│   ├── package.json
-│   └── vite.config.js
+└── frontend/
+    ├── src/
+    ├── public/
+    ├── package.json
+    └── vite.config.js
 ```
 
 ## 已完成内容
