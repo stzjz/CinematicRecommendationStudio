@@ -22,7 +22,6 @@ CinematicRecommendationStudio/
 │   ├── public/
 │   ├── package.json
 │   └── vite.config.js
-└── 第六章 推荐系统实践.pptx
 ```
 
 ## 已完成内容
@@ -421,3 +420,10 @@ RECSYS_DATA_SOURCE=sqlite \
 cd backend
 ../.venv/bin/python -m unittest discover -s tests -v
 ```
+## 开源参考
+
+| 仓库 | 用途 |
+|---|---|
+| [guoyang9/NCF](https://github.com/guoyang9/NCF) | GMF / MLP / NeuMF 基线代码 |
+| [gusye1234/LightGCN-PyTorch](https://github.com/gusye1234/LightGCN-PyTorch) | LightGCN 参考实现 |
+| [hexiangnan/neural_collaborative_filtering](https://github.com/hexiangnan/neural_collaborative_filtering) | 预处理好的 ML-1M 数据 |
