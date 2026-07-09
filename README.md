@@ -421,8 +421,3 @@ RECSYS_DATA_SOURCE=sqlite \
 cd backend
 ../.venv/bin/python -m unittest discover -s tests -v
 ```
-
-## 下一步建议
-
-1. 如果继续做正式模型对比，可以接入 `NeuMF` 或更多 checkpoint。
-2. 如果提供 MovieLens 原始 movieId 与 LightGCN item index 的显式映射文件，可以替换当前按电影排序的 item 映射，让 LightGCN 推荐结果和 UI 电影 ID 完全精确对应。
